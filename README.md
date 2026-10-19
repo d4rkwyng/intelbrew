@@ -43,7 +43,9 @@ Until it's tested, there are no supported setup instructions.
 The top 500 formulae by installs, plus their dependencies and build dependencies, come to
 about 880 formulae. Formulae outside that set still update weekly, but build from source.
 A formula whose Intel build breaks is held at its last working version until it's fixed.
-Held formulae are listed in the weekly status.
+Held formulae are listed in the weekly status. If a formula is still stuck after 8 weeks,
+we drop it: Intelbrew stops building bottles for it and `brew install` builds it from
+source. Dropped formulae are listed in [DROPPED.md](DROPPED.md).
 
 ## Costs of git mode
 
