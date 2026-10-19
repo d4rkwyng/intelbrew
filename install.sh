@@ -1,5 +1,5 @@
 #!/bin/bash
-# Intelbrew installer: DRAFT, UNTESTED. Do not use yet.
+# Intelbrew installer: BETA, UNTESTED. Do not use yet.
 #
 # Installs Homebrew on an Intel (x86_64) Mac in git mode, pointed at the Intelbrew
 # fork of homebrew-core, which carries x86_64 macOS Sonoma bottles:
@@ -26,7 +26,6 @@
 set -euo pipefail
 
 BREW_GIT_URL="https://github.com/Homebrew/brew"
-# TODO(confirm): final fork URL once the repo exists.
 CORE_GIT_REMOTE="https://github.com/d4rkwyng/intelbrew-core"
 PREFIX="/usr/local"
 REPOSITORY="$PREFIX/Homebrew"
@@ -47,7 +46,7 @@ confirm() {  # confirm "<question>" -> returns 0 only on an explicit "yes"
 
 cat <<'EOF'
 ========================================================================
-  Intelbrew installer: DRAFT, UNTESTED, NOT YET USABLE.
+  Intelbrew installer: BETA, UNTESTED, NOT YET USABLE.
   Intelbrew is not affiliated with Homebrew or with rhyn-daitenku/intelbrew.
 ========================================================================
 EOF
@@ -139,7 +138,7 @@ if [[ -e "$REPOSITORY" || -e "$PREFIX/bin/brew" ]]; then
   cat <<EOF
 
 Next steps, in a new terminal:
-  brew update        # re-points homebrew/core at $CORE_GIT_REMOTE
+  brew update        # should re-point homebrew/core at $CORE_GIT_REMOTE (UNVERIFIED)
   brew upgrade
 
 Expect a one-off full clone of homebrew-core (about 1.3 GB).

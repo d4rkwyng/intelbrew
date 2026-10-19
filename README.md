@@ -23,7 +23,7 @@ export HOMEBREW_NO_INSTALL_FROM_API=1
 export HOMEBREW_CORE_GIT_REMOTE=https://github.com/d4rkwyng/intelbrew-core
 ```
 
-**An installer is coming.** `install.sh` in this repo is a draft: it installs brew to
+**An installer is coming.** `install.sh` in this repo is a **beta, untested** draft: it installs brew to
 `/usr/local`, adds those two lines to your shell profile, and clones core from the fork.
 Until it's tested, there are no supported setup instructions.
 
@@ -70,3 +70,8 @@ source. Dropped formulae are listed in [DROPPED.md](DROPPED.md).
   the Homebrew project. "Homebrew" is used here only to describe what this works with.
 - Intelbrew is **not affiliated with `rhyn-daitenku/intelbrew`**, an unrelated project with
   the same name.
+
+## Trademarks
+
+Homebrew, Apple, Mac, macOS and Intel are trademarks of their respective owners. They are
+used here only to describe compatibility. No endorsement is implied.
