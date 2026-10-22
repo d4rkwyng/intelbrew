@@ -5,7 +5,7 @@ Keeping Homebrew usable on Intel Macs.
 > **Status: pre-release, not yet usable.** No bottles have been published and the
 > installer is an untested draft. Please don't point a real Mac at this yet.
 
-Homebrew made Intel macOS a Tier 3 platform in 7.0. Upstream no longer builds x86_64
+Homebrew made Intel macOS a Tier 3 platform in September 2026. Upstream no longer builds x86_64
 bottles and plans to remove Intel support in or after September 2027. Intelbrew
 rebuilds x86_64 bottles for the most-installed homebrew-core formulae every week, on
 our own Intel macOS Sonoma builder. After you switch over, plain `brew install` and
@@ -42,6 +42,9 @@ Until it's tested, there are no supported setup instructions.
 
 The top 500 formulae by installs, plus their dependencies and build dependencies, come to
 about 880 formulae. Formulae outside that set still update weekly, but build from source.
+A few formulae can't be built on our Sonoma builder (for example ones that need a full
+Xcode or a newer toolchain; currently this includes `node`). Those, and formulae that
+depend on them, get no Intelbrew bottle and also build from source.
 A formula whose Intel build breaks is held at its last working version until it's fixed.
 Held formulae are listed in the weekly status. If a formula is still stuck after 8 weeks,
 we drop it: Intelbrew stops building bottles for it and `brew install` builds it from
