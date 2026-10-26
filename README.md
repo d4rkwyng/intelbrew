@@ -50,6 +50,20 @@ use `brew` as usual.
   `<file>.intelbrew-backup-<date>`. Running it again changes nothing.
 - It checks afterwards that homebrew/core's `origin` really is the fork, and fails loudly
   if not. It refuses if a `brew.env` file overrides `HOMEBREW_CORE_GIT_REMOTE`.
+- Before the first core clone it tells you it's a one-time download of about 1.3 GB
+  (roughly 5-10 minutes). It ends with a boxed **ACTION NEEDED** note: windows that were
+  already open, including the one you ran it from, must be restarted
+  (`exec $SHELL -l`), and it says so explicitly if that shell still has a different
+  `HOMEBREW_CORE_GIT_REMOTE`.
+- Once core points at the fork, it lists installed formulae that are **newer** than
+  Intelbrew's version (e.g. installed earlier from Homebrew's API). They stay as they
+  are, since brew never downgrades, until Intelbrew catches up; a reinstall would use the
+  older fork version. It also lists installed formulae with **no Intelbrew bottle** for
+  your macOS, which will build from source on upgrade or reinstall.
+- If Homebrew itself (`Homebrew/brew`) comes from a fork, set by
+  `HOMEBREW_BREW_GIT_REMOTE` or by the origin of `$(brew --repository)`, it warns that
+  the fork may be behind upstream. Run interactively, it offers (default No) to switch
+  back to `https://github.com/Homebrew/brew`. With `--yes` it only warns.
 
 To check, in a new terminal: `brew config` should list both variables, and
 `git -C "$(brew --repository homebrew/core)" remote get-url origin` should print the fork.
