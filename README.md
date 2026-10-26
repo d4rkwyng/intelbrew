@@ -40,8 +40,11 @@ use `brew` as usual.
   you already have one, it points its `origin` at the fork and checks out the fork's
   `main`; it refuses if that checkout has uncommitted changes. Formulae you already have
   stay as they are; new installs and upgrades use Intelbrew bottles where there is one.
-- **Shell profile:** it puts the two `export` lines above in `~/.zprofile` (zsh) or
-  `~/.bash_profile` (bash; `~/.profile` if that's the only one you have). Existing lines
+- **Shell profile:** it puts the two `export` lines above in `~/.zshenv` (zsh; read by
+  every zsh, including non-login ones in tmux and IDE terminals) or in both
+  `~/.bash_profile` and `~/.bashrc` (bash; `~/.profile` instead of `~/.bash_profile` if
+  that's the only one you have), then checks that a new login and non-login shell both
+  see them. Windows already open keep the old settings until reopened. Existing lines
   for those variables in any zsh/bash startup file are rewritten in place, duplicates
   removed, and each edited file is backed up next to itself as
   `<file>.intelbrew-backup-<date>`. Running it again changes nothing.

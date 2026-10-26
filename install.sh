@@ -158,17 +158,22 @@ done
 
 # ---- 2. which shell profile ----------------------------------------------------
 zdot="${ZDOTDIR:-$HOME}"
+# The settings must reach EVERY shell brew runs from, not just login shells: a
+# non-login zsh (tmux, IDE terminals, some iTerm2 profiles) never reads .zprofile,
+# and brew then silently falls back to the upstream API feed and source builds.
+targets=()
 case "${SHELL:-}" in
-  */zsh)  target="$zdot/.zprofile" ;;   # login shells (Terminal.app) read .zprofile
+  */zsh)  targets=("$zdot/.zshenv") ;;   # read by every zsh: login, interactive or not
   */bash)
-    # bash login shells read the first of .bash_profile, .bash_login, .profile.
+    # bash login shells read the first of .bash_profile, .bash_login, .profile;
+    # interactive non-login shells read only .bashrc. Write both.
     # Creating .bash_profile when only .profile exists would stop .profile being read.
-    if   [[ -e "$HOME/.bash_profile" ]]; then target="$HOME/.bash_profile"
-    elif [[ -e "$HOME/.bash_login" ]];   then target="$HOME/.bash_login"
-    elif [[ -e "$HOME/.profile" ]];      then target="$HOME/.profile"
-    else target="$HOME/.bash_profile"
-    fi ;;
-  *) target="" ;;
+    if   [[ -e "$HOME/.bash_profile" ]]; then targets=("$HOME/.bash_profile")
+    elif [[ -e "$HOME/.bash_login" ]];   then targets=("$HOME/.bash_login")
+    elif [[ -e "$HOME/.profile" ]];      then targets=("$HOME/.profile")
+    else targets=("$HOME/.bash_profile")
+    fi
+    targets+=("$HOME/.bashrc") ;;
 esac
 # Every zsh/bash startup file in which an existing line gets rewritten.
 scan_files=("$zdot/.zshenv" "$zdot/.zprofile" "$zdot/.zshrc" "$zdot/.zlogin"
@@ -206,13 +211,19 @@ rewrite_profile() {
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/intelbrew.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 
+is_target() {
+  local t
+  for t in ${targets[@]+"${targets[@]}"}; do [[ "$1" == "$t" ]] && return 0; done
+  return 1
+}
+
 profile_changes=()   # files whose content would change
 plan_profiles() {
   local f mode i=0
   profile_changes=()
   for f in "${scan_files[@]}"; do
     mode=keep
-    [[ "$f" == "$target" ]] && mode=append
+    is_target "$f" && mode=append
     [[ -e "$f" || "$mode" == "append" ]] || continue
     i=$((i + 1))
     rewrite_profile "$f" "$tmpdir/profile.$i" "$mode"
@@ -353,8 +364,8 @@ fi
 
 say "macOS $macos, $arch. Homebrew: $mode install at $PREFIX."
 if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 ]]; then
-  if [[ -n "$target" ]]; then
-    say "Already set up: homebrew/core comes from $CORE_GIT_REMOTE and $target has both settings. Nothing to change."
+  if (( ${#targets[@]} > 0 )); then
+    say "Already set up: homebrew/core comes from $CORE_GIT_REMOTE and ${targets[*]} has both settings. Nothing to change."
   else
     say "homebrew/core already comes from $CORE_GIT_REMOTE. Nothing to change."
     warn "Unrecognised login shell (${SHELL:-unset}). Make sure its startup file has:"
@@ -377,7 +388,7 @@ case "$core_action" in
           printf '    fetch it and check out its main: local branch "main" is reset to origin/main;\n'
           printf '    any local commits on it are discarded (the tree is clean, checked above)\n' ;;
 esac
-if [[ -n "$target" ]]; then
+if (( ${#targets[@]} > 0 )); then
   show_profile_plan
 else
   warn "Unrecognised login shell (${SHELL:-unset}). Add these two lines to its startup file yourself:"
@@ -437,10 +448,40 @@ if [[ "$core_action" != "none" ]]; then
   verify_core   # brew update rewrites the core remote from HOMEBREW_CORE_GIT_REMOTE
 fi
 
+# A shell started the way the user's terminals start must see both settings,
+# including a NON-login one (tmux, IDE terminals), or brew silently uses the
+# upstream API feed instead of Intelbrew. Check in fresh child shells.
+# shellcheck disable=SC2016  # the $VARs are expanded by the child shell
+probe='printf "%s|%s" "$HOMEBREW_CORE_GIT_REMOTE" "$HOMEBREW_NO_INSTALL_FROM_API"'
+shell_sees() {  # shell_sees login|nonlogin: prints "<remote>|<api>" as that shell sees them
+  local zd=()
+  [[ -n "${ZDOTDIR:-}" ]] && zd=("ZDOTDIR=$ZDOTDIR")
+  case "${SHELL:-}:$1" in
+    */zsh:nonlogin)  env -i HOME="$HOME" ${zd[@]+"${zd[@]}"} zsh -c "$probe" 2>/dev/null ;;
+    */zsh:login)     env -i HOME="$HOME" ${zd[@]+"${zd[@]}"} zsh -lc "$probe" 2>/dev/null ;;
+    */bash:login)    env -i HOME="$HOME" bash -lc "$probe" 2>/dev/null ;;
+    */bash:nonlogin) env -i HOME="$HOME" bash -ic "$probe" 2>/dev/null </dev/null ;;
+  esac
+}
+if (( ${#targets[@]} > 0 )); then
+  for how in login nonlogin; do
+    seen="$(shell_sees "$how" || true)"
+    if [[ "$(normalize_url "${seen%%|*}")" != "$CORE_GIT_REMOTE" || "${seen#*|}" != "1" ]]; then
+      warn "A new $how ${SHELL##*/} shell does not see both settings (got '${seen:-nothing}'). Something later in your startup files may override them; check with: grep -n HOMEBREW_ ~/.z* ~/.bash* ~/.profile"
+    else
+      say "Checked: a new $how ${SHELL##*/} shell sees both settings."
+    fi
+  done
+fi
+
 cat <<EOF
 
-Intelbrew is set up. Open a NEW terminal window (so ${target:-your profile} is read), then:
-  brew config         # should show HOMEBREW_CORE_GIT_REMOTE and HOMEBREW_NO_INSTALL_FROM_API
+Intelbrew is set up. The settings are in: ${targets[*]:-the startup file of your shell}.
+Terminal windows that were already open still have the OLD settings. Open a new
+window (or run: exec ${SHELL:-zsh} -l), then check:
+  brew config | grep -E 'CORE_GIT_REMOTE|NO_INSTALL_FROM_API'
+    # expect  HOMEBREW_CORE_GIT_REMOTE: $CORE_GIT_REMOTE
+    #   and   HOMEBREW_NO_INSTALL_FROM_API: set
   brew install <formula>
 
 Formulae without an Intelbrew bottle build from source; see

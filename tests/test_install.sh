@@ -148,7 +148,7 @@ LINE_REMOTE="export HOMEBREW_CORE_GIT_REMOTE=\"$FORK_URL\""
 LINE_API="export HOMEBREW_NO_INSTALL_FROM_API=1"
 
 # ---- cases ---------------------------------------------------------------------
-start "fresh Mac, zsh: installs, taps fork, writes .zprofile"
+start "fresh Mac, zsh: installs, taps fork, writes .zshenv"
 run_install
 check "exit 0" test "$RC" -eq 0
 check "brew symlink" test -L "$P/bin/brew"
@@ -156,9 +156,14 @@ check "brew cloned" logged "git clone https://github.com/Homebrew/brew $P/Homebr
 check "tap ran with env" logged "brew tap homebrew/core [API=1 REMOTE=$FORK_URL]"
 check "core origin is fork" remote_is "$FORK_URL"
 check "brew update ran" logged "brew update"
-check ".zprofile has remote once" test "$(count '^export HOMEBREW_CORE_GIT_REMOTE=' "$H/.zprofile")" = 1
-check ".zprofile has api once" test "$(count '^export HOMEBREW_NO_INSTALL_FROM_API=1$' "$H/.zprofile")" = 1
-check ".zprofile exact remote line" grep -qxF "$LINE_REMOTE" "$H/.zprofile"
+check ".zshenv has remote once" test "$(count '^export HOMEBREW_CORE_GIT_REMOTE=' "$H/.zshenv")" = 1
+check ".zshenv has api once" test "$(count '^export HOMEBREW_NO_INSTALL_FROM_API=1$' "$H/.zshenv")" = 1
+check ".zshenv exact remote line" grep -qxF "$LINE_REMOTE" "$H/.zshenv"
+check "no .zprofile created" test ! -e "$H/.zprofile"
+# The real-world bug: a NON-login zsh (tmux, IDE terminals) never read .zprofile.
+check "non-login zsh sees remote" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_CORE_GIT_REMOTE"')" = "$FORK_URL"
+check "non-login zsh sees api" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_NO_INSTALL_FROM_API"')" = 1
+check "installer checked non-login shell" has "a new nonlogin zsh shell sees both settings"
 check "no .zshrc created" test ! -e "$H/.zshrc"
 check "no sudo" bash -c "! grep -q '^sudo' '$LOG'"
 before="$(snapshot)"; : >"$LOG"
@@ -213,8 +218,9 @@ run_install
 check "exit 0" test "$RC" -eq 0
 check "tapped" logged "brew tap homebrew/core [API=1 REMOTE=$FORK_URL]"
 check "origin fork" remote_is "$FORK_URL"
-check "block appended" grep -qxF "$LINE_REMOTE" "$H/.zprofile"
-check "kept EDITOR" grep -qxF 'export EDITOR=vim' "$H/.zprofile"
+check "block in .zshenv" grep -qxF "$LINE_REMOTE" "$H/.zshenv"
+check ".zprofile untouched" grep -qxF 'export EDITOR=vim' "$H/.zprofile"
+check ".zprofile has no remote" bash -c "! grep -q HOMEBREW_ '$H/.zprofile'"
 finish
 
 start "existing install, core tap on upstream: switches to fork main"
@@ -259,6 +265,7 @@ SH=/bin/bash run_install
 check "exit 0" test "$RC" -eq 0
 check ".profile has remote" grep -qxF "$LINE_REMOTE" "$H/.profile"
 check "no .bash_profile" test ! -e "$H/.bash_profile"
+check ".bashrc also written (non-login bash)" grep -qxF "$LINE_REMOTE" "$H/.bashrc"
 finish
 
 start "bash with duplicate lines in .bash_profile and .bashrc"
@@ -277,8 +284,8 @@ start "ZDOTDIR respected for zsh"
 mkdir -p "$H/zdot"
 run_install ZDOTDIR="$H/zdot"
 check "exit 0" test "$RC" -eq 0
-check "zdot/.zprofile written" grep -qxF "$LINE_REMOTE" "$H/zdot/.zprofile"
-check "no ~/.zprofile" test ! -e "$H/.zprofile"
+check "zdot/.zshenv written" grep -qxF "$LINE_REMOTE" "$H/zdot/.zshenv"
+check "no ~/.zshenv" test ! -e "$H/.zshenv"
 finish
 
 start "unknown shell: warns, edits no profile"
