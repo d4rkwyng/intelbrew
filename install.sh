@@ -132,6 +132,14 @@ fi
 (( clt_ok == 1 )) || die "The Command Line Tools are not installed. Run: xcode-select --install (or download them from https://developer.apple.com/download/all/), then run this again."
 git --version >/dev/null 2>&1 || die "git doesn't run, though the Command Line Tools look installed. Try: xcode-select --install"
 
+# Other package managers: warn only, never touch them.
+if [[ -x /opt/local/bin/port ]]; then
+  warn "MacPorts is installed (/opt/local/bin/port). Intelbrew leaves it alone, but having both on PATH can mix up libraries; consider removing whichever you don't use."
+fi
+if [[ -e /opt/homebrew/bin/brew ]]; then
+  warn "Found an Apple Silicon-style Homebrew at /opt/homebrew. Intelbrew leaves it alone; it can't pour Intel bottles, so remove it from your PATH if you don't need it."
+fi
+
 # brew.env files override the shell environment (bin/brew), so a conflicting value
 # there would silently undo everything below. Refuse rather than edit them.
 if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then user_env="$XDG_CONFIG_HOME/homebrew/brew.env"
@@ -254,6 +262,53 @@ if [[ -e "$BREW" || -e "$REPOSITORY" ]]; then
   [[ -x "$BREW" && -d "$REPOSITORY/.git" ]] \
     || die "Found a partial Homebrew ($BREW or $REPOSITORY missing or not a git checkout). Fix or remove it yourself, then run this again."
   mode=existing
+  # Tell the user what is already there, and let them switch it in place,
+  # uninstall it first, or stop. Uninstalling is never done unattended.
+  existing_version="$("$BREW" --version 2>/dev/null | head -1 || true)"
+  existing_core="$("$BREW" --repository homebrew/core 2>/dev/null || true)"
+  if [[ -d "$existing_core/.git" ]]; then
+    existing_source="homebrew/core tap, origin $(git -C "$existing_core" config --get remote.origin.url || echo '?')"
+  else
+    existing_source="API mode (no local homebrew/core tap)"
+  fi
+  existing_count="$("$BREW" list --formula 2>/dev/null | wc -l | tr -d ' ' || true)"
+  say "Found an existing Homebrew at $PREFIX:"
+  printf '    %s\n    formulae from: %s\n    installed formulae: %s\n' \
+    "${existing_version:-unknown version}" "$existing_source" "${existing_count:-?}"
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    say "--yes given: switching it to Intelbrew in place (installed packages are kept)."
+  else
+    cat >/dev/tty <<'EOF'
+  [S] Switch it to Intelbrew in place (default). Installed packages are kept;
+      the next `brew upgrade` moves them to Intelbrew bottles.
+  [U] Uninstall it first with Homebrew's official uninstaller, then install fresh.
+      This removes every installed formula and cask.
+  [Q] Quit without changing anything.
+EOF
+    printf 'Choose S, U or Q [S]: ' >/dev/tty
+    choice=""
+    IFS= read -r choice </dev/tty || true
+    case "${choice:-S}" in
+      [Ss]*) ;;
+      [Uu]*)
+        confirm "Uninstall the Homebrew at $PREFIX and every package it installed?" \
+          || die "Not confirmed. Nothing was changed."
+        uninstaller="$(mktemp -t brew-uninstall)"
+        run curl -fsSL -o "$uninstaller" https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh
+        # Interactive: Homebrew's uninstaller asks for its own confirmation.
+        /bin/bash "$uninstaller" --path "$PREFIX" </dev/tty || die "Homebrew's uninstaller failed. Fix that, then run this again."
+        rm -f "$uninstaller"
+        hash -r
+        [[ ! -e "$BREW" ]] || die "$BREW is still there after uninstalling. Remove it, then run this again."
+        if [[ -e "$REPOSITORY" ]]; then
+          warn "$REPOSITORY is still there after uninstalling; moving it aside."
+          run sudo mv "$REPOSITORY" "$REPOSITORY.intelbrew-old-$STAMP"
+        fi
+        mode=fresh
+        ;;
+      *) die "Quit. Nothing was changed." ;;
+    esac
+  fi
 else
   other="$(command -v brew 2>/dev/null || true)"
   [[ -z "$other" ]] || die "Found brew at $other, outside $PREFIX. Intelbrew's bottles only work in $PREFIX; this installer won't touch that install."
