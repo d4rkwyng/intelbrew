@@ -1,199 +1,393 @@
 #!/bin/bash
-# Intelbrew installer: BETA, UNTESTED. Do not use yet.
+# Intelbrew installer.
 #
-# Installs Homebrew on an Intel (x86_64) Mac in git mode, pointed at the Intelbrew
-# fork of homebrew-core, which carries x86_64 macOS Sonoma bottles:
-#   1. git clone https://github.com/Homebrew/brew -> /usr/local/Homebrew
-#   2. symlink /usr/local/bin/brew
-#   3. add HOMEBREW_NO_INSTALL_FROM_API=1 and HOMEBREW_CORE_GIT_REMOTE=<intelbrew-core>
-#      to your shell profile (once; an existing Intelbrew block is left alone)
-#   4. `brew tap homebrew/core`, which clones core from the Intelbrew fork
+# Sets up Homebrew on an Intel (x86_64) Mac in git mode, with homebrew/core cloned
+# from the Intelbrew fork, which carries x86_64 macOS Sonoma bottles.
 #
-# It refuses to run on Apple Silicon (including under Rosetta), as root, without a
-# terminal, or without the Command Line Tools. It never deletes anything. It prints
-# every command before running it and asks before making any change.
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
 #
-# Why our own installer: the official Homebrew/install script aborts on Intel
-# (Homebrew/install PR #1140, 2026-09-11).
+# Works for both:
+#   (a) a Mac with no Homebrew: clones Homebrew/brew to /usr/local/Homebrew, links
+#       /usr/local/bin/brew, then taps homebrew/core from the fork;
+#   (b) an existing /usr/local Homebrew: taps homebrew/core from the fork, or, if a
+#       core tap already exists, points its origin at the fork and checks out the
+#       fork's main.
+# In both cases it sets these two variables in your login shell profile:
+#   export HOMEBREW_NO_INSTALL_FROM_API=1
+#   export HOMEBREW_CORE_GIT_REMOTE="https://github.com/d4rkwyng/intelbrew-core"
+# Existing lines for either variable in any zsh/bash startup file are rewritten in
+# place (duplicates removed), never appended twice. Each file is backed up first.
+# Re-running the script when everything is already set up changes nothing.
 #
-# TODO(before release), all UNVERIFIED:
-#   - Run end to end on a clean Intel Sonoma VM and on a Mac with an existing
-#     /usr/local Homebrew.
-#   - Compare the directory list and ownership handling with the official installer.
-#   - Confirm a fresh git-mode clone of core (~1.3 GB) and `brew update` behave as the
-#     design doc describes (tap/core_tap.rb, cmd/update.sh).
-#   - Confirm the CPU feature check matches the bottles' Westmere baseline.
+# Brew behaviour this relies on (Homebrew/brew source):
+#   - Library/Homebrew/tap/core_tap.rb: with HOMEBREW_NO_INSTALL_FROM_API set,
+#     `brew tap homebrew/core` clones HOMEBREW_CORE_GIT_REMOTE.
+#   - Library/Homebrew/cmd/update.sh: `brew update` resets the core tap's origin to
+#     HOMEBREW_CORE_GIT_REMOTE whenever that differs from the default remote.
+#   - bin/brew: brew.env files (/etc/homebrew, <prefix>/etc/homebrew, ~/.homebrew)
+#     are exported after the shell environment, so they override the profile.
+#
+# Options / environment:
+#   --yes, INTELBREW_YES=1   don't ask before each change (still prints them)
+#   INTELBREW_PREFIX         install prefix, default /usr/local (for testing only:
+#                            Intel bottles are only relocatable to /usr/local)
 set -euo pipefail
 
-BREW_GIT_URL="https://github.com/Homebrew/brew"
 CORE_GIT_REMOTE="https://github.com/d4rkwyng/intelbrew-core"
-PREFIX="/usr/local"
+BREW_GIT_URL="https://github.com/Homebrew/brew"
+PREFIX="${INTELBREW_PREFIX:-/usr/local}"
 REPOSITORY="$PREFIX/Homebrew"
+BREW="$PREFIX/bin/brew"
+MIN_MACOS=14
 MARK_BEGIN="# >>> intelbrew >>>"
 MARK_END="# <<< intelbrew <<<"
+LINE_API="export HOMEBREW_NO_INSTALL_FROM_API=1"
+LINE_REMOTE="export HOMEBREW_CORE_GIT_REMOTE=\"$CORE_GIT_REMOTE\""
+STAMP="$(date +%Y%m%d-%H%M%S)"
+
+ASSUME_YES="${INTELBREW_YES:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    -y|--yes) ASSUME_YES=1 ;;
+    -h|--help) sed -n '2,35p' "$0" 2>/dev/null || true; exit 0 ;;
+    *) printf 'Error: unknown option: %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 
 say()  { printf '==> %s\n' "$*"; }
 warn() { printf 'Warning: %s\n' "$*" >&2; }
 die()  { printf 'Error: %s\n' "$*" >&2; exit 1; }
 run()  { printf '+ %s\n' "$*"; "$@"; }
 
-confirm() {  # confirm "<question>" -> returns 0 only on an explicit "yes"
+confirm() {  # confirm "<question>": 0 only on an explicit "yes" (or --yes)
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    printf '%s (yes: --yes given)\n' "$1"
+    return 0
+  fi
   local answer=""
   printf '%s Type "yes" to continue: ' "$1" >/dev/tty
   IFS= read -r answer </dev/tty || true
   [[ "$answer" == "yes" ]]
 }
 
+# Strip one trailing "/" and ".git" so equivalent remote spellings compare equal.
+normalize_url() {
+  local u="$1"
+  u="${u%/}"
+  u="${u%.git}"
+  printf '%s' "$u"
+}
+
 cat <<'EOF'
 ========================================================================
-  Intelbrew installer: BETA, UNTESTED, NOT YET USABLE.
+  Intelbrew installer: Homebrew in git mode with Intel Sonoma bottles.
   Intelbrew is not affiliated with Homebrew or with rhyn-daitenku/intelbrew.
 ========================================================================
 EOF
 
-# ---- checks (no changes made) ------------------------------------------------
+# ---- 1. system checks (nothing is changed) ------------------------------------
 [[ "$(uname -s)" == "Darwin" ]] || die "Intelbrew is for macOS only."
-[[ "${EUID:-$(id -u)}" -ne 0 ]] || die "Don't run this as root or with sudo. It asks for sudo itself when needed."
-[[ -r /dev/tty && -w /dev/tty ]] || die "This installer needs an interactive terminal to confirm each step."
+[[ "$(id -u)" -ne 0 ]] || die "Don't run this as root or with sudo. It asks for sudo itself if it needs it."
+if [[ "$ASSUME_YES" != "1" ]] && ! { : </dev/tty; } 2>/dev/null; then
+  die "No terminal to ask for confirmation. Run it from Terminal, or pass --yes."
+fi
 
 arch="$(uname -m)"
 translated="$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)"
 arm64_hw="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
 if [[ "$arch" == "arm64" || "$translated" == "1" || "$arm64_hw" == "1" ]]; then
-  die "This is an Apple Silicon Mac. Use the official Homebrew installer from https://brew.sh instead."
+  die "This is an Apple Silicon Mac (including under Rosetta). Intelbrew is for Intel Macs only; use the official installer from https://brew.sh."
 fi
 [[ "$arch" == "x86_64" ]] || die "Unsupported architecture: $arch"
 
+# Minimum version only. Sequoia, Tahoe and later (including OpenCore Legacy Patcher
+# installs) are fine: brew uses Sonoma bottles on newer macOS. No model allow-list.
 macos="$(sw_vers -productVersion)"
 macos_major="${macos%%.*}"
-if (( macos_major < 11 )); then
-  die "macOS $macos is older than Homebrew's minimum (11). See https://www.macports.org"
-fi
-if (( macos_major < 14 )); then
-  warn "Intelbrew bottles are built on macOS 14 (Sonoma). On macOS $macos, brew will build formulae from source."
+[[ "$macos_major" =~ ^[0-9]+$ ]] || die "Could not parse the macOS version: '$macos'"
+if (( macos_major < MIN_MACOS )); then
+  die "macOS $macos is older than macOS $MIN_MACOS Sonoma. Intelbrew's bottles need Sonoma or newer, so this installer stops here. Nothing was changed."
 fi
 
-# Bottles target the Westmere baseline (Homebrew extend/os/mac/hardware.rb), so they
-# need at least SSE4.2, POPCNT and AES. Core 2 / Penryn Macs lack them.
-cpu_features="$(sysctl -n machdep.cpu.features 2>/dev/null || true)"
-for feature in SSE4.2 POPCNT AES; do
-  if [[ " $cpu_features " != *" $feature "* ]]; then
-    warn "CPU lacks $feature. Intelbrew bottles won't run on this Mac (Core 2 / Penryn are not supported)."
-    confirm "Continue anyway? Everything will build from source." || die "Stopped. Nothing was changed."
-    break
-  fi
+# Bottles target Homebrew's Intel baseline, -march=westmere
+# (Library/Homebrew/extend/os/mac/hardware.rb), which needs these CPU features.
+# Core 2 / Penryn CPUs lack them, and pouring the bottles there gives crashing binaries.
+cpu_features=" $(sysctl -n machdep.cpu.features 2>/dev/null || true) "
+missing_features=""
+for feature in SSE4.2 POPCNT AES PCLMULQDQ; do
+  [[ "$cpu_features" == *" $feature "* ]] || missing_features="$missing_features $feature"
+done
+if [[ -n "$missing_features" ]]; then
+  die "This CPU lacks:$missing_features. Intelbrew's bottles need a Westmere-class CPU or newer; they won't run on Core 2 / Penryn. Nothing was changed."
+fi
+
+# Command Line Tools: needed on Intel even to pour bottles. Don't rely on
+# softwareupdate (OCLP systems can't always reach the catalog).
+clt_ok=0
+if clt_path="$(xcode-select -p 2>/dev/null)" && [[ -n "$clt_path" && -d "$clt_path" ]]; then
+  clt_ok=1
+elif pkgutil --pkg-info=com.apple.pkg.CLTools_Executables >/dev/null 2>&1; then
+  clt_ok=1
+fi
+(( clt_ok == 1 )) || die "The Command Line Tools are not installed. Run: xcode-select --install (or download them from https://developer.apple.com/download/all/), then run this again."
+git --version >/dev/null 2>&1 || die "git doesn't run, though the Command Line Tools look installed. Try: xcode-select --install"
+
+# brew.env files override the shell environment (bin/brew), so a conflicting value
+# there would silently undo everything below. Refuse rather than edit them.
+if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then user_env="$XDG_CONFIG_HOME/homebrew/brew.env"
+else user_env="$HOME/.homebrew/brew.env"; fi
+for envfile in /etc/homebrew/brew.env "$PREFIX/etc/homebrew/brew.env" "$user_env"; do
+  [[ -r "$envfile" ]] || continue
+  while IFS= read -r line; do
+    case "$line" in
+      HOMEBREW_CORE_GIT_REMOTE=*)
+        v="${line#HOMEBREW_CORE_GIT_REMOTE=}"; v="${v%\"}"; v="${v#\"}"
+        [[ "$(normalize_url "$v")" == "$CORE_GIT_REMOTE" ]] \
+          || die "$envfile sets HOMEBREW_CORE_GIT_REMOTE=$v, which overrides your shell profile. Remove that line or set it to $CORE_GIT_REMOTE, then run this again." ;;
+    esac
+  done <"$envfile"
 done
 
-if ! xcode-select -p >/dev/null 2>&1; then
-  die "The Command Line Tools are required, even to pour bottles on Intel. Run: xcode-select --install, then run this again."
-fi
-command -v git >/dev/null 2>&1 || die "git not found, though the Command Line Tools are installed."
-
-# ---- shell profile -------------------------------------------------------------
+# ---- 2. which shell profile ----------------------------------------------------
+zdot="${ZDOTDIR:-$HOME}"
 case "${SHELL:-}" in
-  */zsh)  profile="$HOME/.zprofile" ;;
-  */bash) profile="$HOME/.bash_profile" ;;
-  *)      profile="" ;;
+  */zsh)  target="$zdot/.zprofile" ;;   # login shells (Terminal.app) read .zprofile
+  */bash)
+    # bash login shells read the first of .bash_profile, .bash_login, .profile.
+    # Creating .bash_profile when only .profile exists would stop .profile being read.
+    if   [[ -e "$HOME/.bash_profile" ]]; then target="$HOME/.bash_profile"
+    elif [[ -e "$HOME/.bash_login" ]];   then target="$HOME/.bash_login"
+    elif [[ -e "$HOME/.profile" ]];      then target="$HOME/.profile"
+    else target="$HOME/.bash_profile"
+    fi ;;
+  *) target="" ;;
 esac
+# Every zsh/bash startup file in which an existing line gets rewritten.
+scan_files=("$zdot/.zshenv" "$zdot/.zprofile" "$zdot/.zshrc" "$zdot/.zlogin"
+            "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc")
 
-profile_block() {
-  cat <<EOF
-$MARK_BEGIN
-eval "\$($PREFIX/bin/brew shellenv)"
-export HOMEBREW_NO_INSTALL_FROM_API=1
-export HOMEBREW_CORE_GIT_REMOTE=$CORE_GIT_REMOTE
-$MARK_END
-EOF
-}
-
-write_profile() {
-  if [[ -z "$profile" ]]; then
-    warn "Unrecognised shell (${SHELL:-unset}). Add these lines to your shell's startup file yourself:"
-    profile_block
-    return 0
-  fi
-  if [[ -f "$profile" ]] && grep -qF "$MARK_BEGIN" "$profile"; then
-    say "$profile already has an Intelbrew block. Leaving it unchanged."
-    return 0
-  fi
-  say "This block will be appended to $profile:"
-  profile_block
-  if confirm "Append it?"; then
-    printf '+ append Intelbrew block to %s\n' "$profile"
-    { printf '\n'; profile_block; } >>"$profile"
+# Writes to $2 the new content of profile $1: every HOMEBREW_CORE_GIT_REMOTE= /
+# HOMEBREW_NO_INSTALL_FROM_API= assignment is rewritten to the Intelbrew value, later
+# duplicates are dropped, and (if $3 = append) missing lines are appended in a block.
+rewrite_profile() {
+  local src="$1" out="$2" mode="$3"
+  if [[ -e "$src" ]]; then
+    awk -v lr="$LINE_REMOTE" -v la="$LINE_API" -v mode="$mode" \
+        -v mb="$MARK_BEGIN" -v me="$MARK_END" '
+      function indent(s) { match(s, /^[ \t]*/); return substr(s, 1, RLENGTH) }
+      /^[ \t]*(export[ \t]+)?HOMEBREW_CORE_GIT_REMOTE=/ {
+        if (!seen_r++) print indent($0) lr; next }
+      /^[ \t]*(export[ \t]+)?HOMEBREW_NO_INSTALL_FROM_API=/ {
+        if (!seen_a++) print indent($0) la; next }
+      { print }
+      END {
+        if (mode == "append" && (!seen_r || !seen_a)) {
+          print ""; print mb
+          if (!seen_a) print la
+          if (!seen_r) print lr
+          print me
+        }
+      }' "$src" >"$out"
+  elif [[ "$mode" == "append" ]]; then
+    printf '%s\n%s\n%s\n%s\n' "$MARK_BEGIN" "$LINE_API" "$LINE_REMOTE" "$MARK_END" >"$out"
   else
-    warn "Skipped. Add the block above to $profile yourself."
+    : >"$out"
   fi
 }
 
-# Apply the settings to this script's own environment too, for the steps below.
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/intelbrew.XXXXXX")"
+trap 'rm -rf "$tmpdir"' EXIT
+
+profile_changes=()   # files whose content would change
+plan_profiles() {
+  local f mode i=0
+  profile_changes=()
+  for f in "${scan_files[@]}"; do
+    mode=keep
+    [[ "$f" == "$target" ]] && mode=append
+    [[ -e "$f" || "$mode" == "append" ]] || continue
+    i=$((i + 1))
+    rewrite_profile "$f" "$tmpdir/profile.$i" "$mode"
+    if [[ ! -e "$f" ]] || ! cmp -s "$f" "$tmpdir/profile.$i"; then
+      profile_changes+=("$f" "$tmpdir/profile.$i")
+    fi
+  done
+  return 0
+}
+
+apply_profiles() {
+  local idx f new
+  (( ${#profile_changes[@]} > 0 )) || return 0
+  for ((idx = 0; idx < ${#profile_changes[@]}; idx += 2)); do
+    f="${profile_changes[idx]}"; new="${profile_changes[idx + 1]}"
+    if [[ -e "$f" ]]; then
+      run cp -p "$f" "$f.intelbrew-backup-$STAMP"
+      printf '+ rewrite %s\n' "$f"
+      cat "$new" >"$f"     # in place: keeps permissions, owner and symlinks
+    else
+      printf '+ create %s\n' "$f"
+      cat "$new" >"$f"
+    fi
+  done
+}
+
+show_profile_plan() {
+  local idx f
+  for ((idx = 0; idx < ${#profile_changes[@]}; idx += 2)); do
+    f="${profile_changes[idx]}"
+    if [[ -e "$f" ]]; then
+      printf '  edit %s (backup: %s.intelbrew-backup-%s):\n' "$f" "$f" "$STAMP"
+      diff -u "$f" "${profile_changes[idx + 1]}" | sed -n '3,$p' | sed 's/^/      /' || true
+    else
+      printf '  create %s with:\n' "$f"
+      sed 's/^/      /' "${profile_changes[idx + 1]}"
+    fi
+  done
+}
+
+# ---- 3. what brew/core needs ---------------------------------------------------
 export HOMEBREW_NO_INSTALL_FROM_API=1
 export HOMEBREW_CORE_GIT_REMOTE="$CORE_GIT_REMOTE"
 
-# ---- existing installation: switch mode only -----------------------------------
-if [[ -e "$REPOSITORY" || -e "$PREFIX/bin/brew" ]]; then
-  say "Found an existing Homebrew at $REPOSITORY. Nothing will be reinstalled or deleted."
-  say "Intelbrew will only add the two settings to your shell profile."
-  write_profile
-  cat <<EOF
-
-Next steps, in a new terminal:
-  brew update        # should re-point homebrew/core at $CORE_GIT_REMOTE (UNVERIFIED)
-  brew upgrade
-
-Expect a one-off full clone of homebrew-core (about 1.3 GB).
-EOF
-  exit 0
+mode=""
+if [[ -e "$BREW" || -e "$REPOSITORY" ]]; then
+  [[ -x "$BREW" && -d "$REPOSITORY/.git" ]] \
+    || die "Found a partial Homebrew ($BREW or $REPOSITORY missing or not a git checkout). Fix or remove it yourself, then run this again."
+  mode=existing
+else
+  other="$(command -v brew 2>/dev/null || true)"
+  [[ -z "$other" ]] || die "Found brew at $other, outside $PREFIX. Intelbrew's bottles only work in $PREFIX; this installer won't touch that install."
+  mode=fresh
 fi
 
-# ---- fresh installation ----------------------------------------------------------
+core=""
+core_action=none   # none | tap | switch
+if [[ "$mode" == "existing" ]]; then
+  core="$("$BREW" --repository homebrew/core)"
+  if [[ ! -e "$core" ]]; then
+    core_action=tap
+  elif [[ ! -d "$core/.git" ]]; then
+    die "$core exists but is not a git checkout. Move it aside, then run this again."
+  else
+    current="$(git -C "$core" config --get remote.origin.url || true)"
+    if [[ "$(normalize_url "$current")" != "$CORE_GIT_REMOTE" ]]; then
+      [[ -z "$(git -C "$core" status --porcelain)" ]] \
+        || die "$core has uncommitted changes. Commit, stash or discard them, then run this again. Nothing was changed."
+      core_action=switch
+    fi
+  fi
+else
+  core="$REPOSITORY/Library/Taps/homebrew/homebrew-core"
+  core_action=tap
+fi
+
+plan_profiles
+
+# ---- 4. plan ---------------------------------------------------------------------
 dirs=(Homebrew bin etc include lib sbin share opt var Cellar Caskroom Frameworks
       share/zsh share/zsh/site-functions var/homebrew var/homebrew/linked)
 missing=()
 unwritable=()
-for d in "${dirs[@]}"; do
-  if [[ ! -e "$PREFIX/$d" ]]; then
-    missing+=("$PREFIX/$d")
-  elif [[ ! -w "$PREFIX/$d" ]]; then
-    unwritable+=("$PREFIX/$d")
+if [[ "$mode" == "fresh" ]]; then
+  for d in "${dirs[@]}"; do
+    if [[ ! -e "$PREFIX/$d" ]]; then missing+=("$PREFIX/$d")
+    elif [[ ! -w "$PREFIX/$d" ]]; then unwritable+=("$PREFIX/$d")
+    fi
+  done
+fi
+
+say "macOS $macos, $arch. Homebrew: $mode install at $PREFIX."
+if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 ]]; then
+  if [[ -n "$target" ]]; then
+    say "Already set up: homebrew/core comes from $CORE_GIT_REMOTE and $target has both settings. Nothing to change."
+  else
+    say "homebrew/core already comes from $CORE_GIT_REMOTE. Nothing to change."
+    warn "Unrecognised login shell (${SHELL:-unset}). Make sure its startup file has:"
+    printf '  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE"
   fi
-done
+  exit 0
+fi
 
 say "Plan:"
-(( ${#missing[@]} == 0 ))    || printf '  create, owned by %s:admin (sudo): %s\n' "$USER" "${missing[*]}"
-(( ${#unwritable[@]} == 0 )) || printf '  change owner to %s:admin, not recursive (sudo): %s\n' "$USER" "${unwritable[*]}"
-printf '  git clone %s %s\n' "$BREW_GIT_URL" "$REPOSITORY"
-printf '  ln -s ../Homebrew/bin/brew %s/bin/brew\n' "$PREFIX"
-printf '  append the Intelbrew settings to %s (asked separately)\n' "${profile:-your shell profile}"
-printf '  brew tap homebrew/core   (full clone of %s, about 1.3 GB)\n' "$CORE_GIT_REMOTE"
+if [[ "$mode" == "fresh" ]]; then
+  (( ${#missing[@]} == 0 ))    || printf '  create, owned by %s:admin (sudo if %s is not writable): %s\n' "$USER" "$PREFIX" "${missing[*]}"
+  (( ${#unwritable[@]} == 0 )) || printf '  change owner to %s:admin, not recursive (sudo): %s\n' "$USER" "${unwritable[*]}"
+  printf '  git clone %s %s\n' "$BREW_GIT_URL" "$REPOSITORY"
+  printf '  ln -s ../Homebrew/bin/brew %s\n' "$BREW"
+fi
+case "$core_action" in
+  tap)    printf '  brew tap homebrew/core: full clone of %s (about 1.3 GB)\n' "$CORE_GIT_REMOTE" ;;
+  switch) printf '  in %s:\n' "$core"
+          printf '    set origin to %s (was %s)\n' "$CORE_GIT_REMOTE" "${current:-unset}"
+          printf '    fetch it and check out its main: local branch "main" is reset to origin/main;\n'
+          printf '    any local commits on it are discarded (the tree is clean, checked above)\n' ;;
+esac
+if [[ -n "$target" ]]; then
+  show_profile_plan
+else
+  warn "Unrecognised login shell (${SHELL:-unset}). Add these two lines to its startup file yourself:"
+  printf '  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE"
+  (( ${#profile_changes[@]} == 0 )) || show_profile_plan
+fi
+[[ "$core_action" == "none" ]] || printf '  brew update\n'
 confirm "Proceed?" || die "Stopped. Nothing was changed."
 
-if (( ${#missing[@]} > 0 )); then
-  run sudo mkdir -p "${missing[@]}"
-  run sudo chown "$USER:admin" "${missing[@]}"
-  run sudo chmod u+rwx "${missing[@]}"
+# ---- 5. do it ----------------------------------------------------------------------
+if [[ "$mode" == "fresh" ]]; then
+  if (( ${#missing[@]} > 0 )); then
+    if [[ -w "$PREFIX" ]]; then
+      run mkdir -p "${missing[@]}"            # already owned by you; no sudo needed
+    else
+      run sudo mkdir -p "${missing[@]}"
+      run sudo chown "$USER:admin" "${missing[@]}"
+      run sudo chmod u+rwx "${missing[@]}"
+    fi
+  fi
+  if (( ${#unwritable[@]} > 0 )); then
+    run sudo chown "$USER:admin" "${unwritable[@]}"
+    run sudo chmod u+rwx "${unwritable[@]}"
+  fi
+  # $REPOSITORY was just created empty, so cloning into it is safe.
+  run git clone "$BREW_GIT_URL" "$REPOSITORY"
+  run ln -s ../Homebrew/bin/brew "$BREW"
 fi
-if (( ${#unwritable[@]} > 0 )); then
-  run sudo chown "$USER:admin" "${unwritable[@]}"
-  run sudo chmod u+rwx "${unwritable[@]}"
+[[ "$mode" == "existing" ]] || core="$("$BREW" --repository homebrew/core)"
+
+case "$core_action" in
+  tap)
+    # CoreTap#install clones HOMEBREW_CORE_GIT_REMOTE (never shallow).
+    run "$BREW" tap homebrew/core ;;
+  switch)
+    run git -C "$core" remote set-url origin "$CORE_GIT_REMOTE"
+    run git -C "$core" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+    run git -C "$core" fetch --force origin
+    run git -C "$core" checkout --force -B main origin/main ;;
+esac
+
+verify_core() {
+  local url
+  [[ -d "$core/.git" ]] || die "homebrew/core is not tapped at $core after setup."
+  url="$(git -C "$core" config --get remote.origin.url || true)"
+  if [[ "$(normalize_url "$url")" != "$CORE_GIT_REMOTE" ]]; then
+    die "homebrew/core's origin is '$url', not $CORE_GIT_REMOTE. Setup FAILED; brew would not use Intelbrew bottles."
+  fi
+  say "Verified: homebrew/core origin is $url ($(git -C "$core" rev-parse --short HEAD))."
+}
+verify_core
+
+apply_profiles
+
+if [[ "$core_action" != "none" ]]; then
+  run "$BREW" update
+  verify_core   # brew update rewrites the core remote from HOMEBREW_CORE_GIT_REMOTE
 fi
-
-# $REPOSITORY was just created empty, so cloning into it is safe.
-run git clone "$BREW_GIT_URL" "$REPOSITORY"
-run ln -s ../Homebrew/bin/brew "$PREFIX/bin/brew"
-
-write_profile
-
-# With HOMEBREW_NO_INSTALL_FROM_API=1, CoreTap#install clones HOMEBREW_CORE_GIT_REMOTE
-# (Library/Homebrew/tap/core_tap.rb). Never shallow, by Homebrew's design.
-run "$PREFIX/bin/brew" tap homebrew/core
-run "$PREFIX/bin/brew" update
 
 cat <<EOF
 
-Intelbrew is set up. Open a new terminal, then try:
-  brew install wget
+Intelbrew is set up. Open a NEW terminal window (so ${target:-your profile} is read), then:
+  brew config         # should show HOMEBREW_CORE_GIT_REMOTE and HOMEBREW_NO_INSTALL_FROM_API
+  brew install <formula>
 
-Note: casks also leave API mode with these settings. 'brew install --cask' may
-need an extra homebrew/cask clone (UNVERIFIED).
+Formulae without an Intelbrew bottle build from source; see
+https://github.com/d4rkwyng/intelbrew#coverage
 EOF
