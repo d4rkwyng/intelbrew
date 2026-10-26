@@ -6,16 +6,23 @@
 #
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
 #
+# Homebrew/brew itself comes from the Intelbrew brew fork, d4rkwyng/brew: upstream
+# release tags merged with a small patch that replaces brew's Intel "Tier 3" banner with
+# one line ("Intelbrew: bottles from d4rkwyng/intelbrew-core").
+#
 # Works for both:
-#   (a) a Mac with no Homebrew: clones Homebrew/brew to /usr/local/Homebrew, links
-#       /usr/local/bin/brew, then taps homebrew/core from the fork;
-#   (b) an existing /usr/local Homebrew: taps homebrew/core from the fork, or, if a
-#       core tap already exists, points its origin at the fork and checks out the
-#       fork's main.
-# In both cases it sets these two variables in your login shell profile:
+#   (a) a Mac with no Homebrew: clones d4rkwyng/brew to /usr/local/Homebrew, checks
+#       out its newest release tag, links /usr/local/bin/brew, then taps
+#       homebrew/core from the core fork;
+#   (b) an existing /usr/local Homebrew: points Homebrew/brew's origin at d4rkwyng/brew
+#       and checks out its newest release tag; taps homebrew/core from the core fork,
+#       or, if a core tap already exists, points its origin at the fork and checks out
+#       the fork's main.
+# In both cases it sets these three variables in your shell startup files:
 #   export HOMEBREW_NO_INSTALL_FROM_API=1
 #   export HOMEBREW_CORE_GIT_REMOTE="https://github.com/d4rkwyng/intelbrew-core"
-# Existing lines for either variable in any zsh/bash startup file are rewritten in
+#   export HOMEBREW_BREW_GIT_REMOTE="https://github.com/d4rkwyng/brew"
+# Existing lines for any of them in any zsh/bash startup file are rewritten in
 # place (duplicates removed), never appended twice. Each file is backed up first.
 # Re-running the script when everything is already set up changes nothing.
 #
@@ -26,9 +33,17 @@
 #     HOMEBREW_CORE_GIT_REMOTE whenever that differs from the default remote.
 #   - bin/brew: brew.env files (/etc/homebrew, <prefix>/etc/homebrew, ~/.homebrew)
 #     are exported after the shell environment, so they override the profile.
-#   - cmd/update.sh: `brew update` likewise resets Homebrew/brew's own origin to
-#     HOMEBREW_BREW_GIT_REMOTE when that is set to a non-default value, but never
-#     resets an origin back to upstream when the variable is unset.
+#   - cmd/update.sh: `brew update` likewise sets Homebrew/brew's own origin to
+#     HOMEBREW_BREW_GIT_REMOTE when that is set to a non-default value and runs
+#     `git fetch --force --tags origin` (lines ~97-104, ~716-722), so the fork's tag X
+#     replaces a local upstream tag X. It then checks out the highest local tag
+#     matching ^N.N.N$ (`git tag --list --sort=-version:refname`, ~262-275) as branch
+#     "stable" (`git checkout --force -B stable refs/tags/X`, ~331). This installer
+#     does the same, and deletes local N.N.N tags newer than the fork's newest
+#     (upstream's unpatched copies), which brew would otherwise pick.
+#     Exception (~595-602): with HOMEBREW_DEVELOPER, or once a developer command has
+#     run (git config homebrew.devcmdrun), `brew update` follows the fork's default
+#     branch instead of tags.
 #   - formula.rb (Formula#outdated_kegs): a keg is only outdated when the formula's
 #     pkg_version is greater, so brew never "upgrades" a newer keg down to the fork's.
 #   - extend/os/mac/utils/bottles.rb (find_matching_tag): brew pours the bottle for
@@ -55,12 +70,8 @@ ORIG_API="${HOMEBREW_NO_INSTALL_FROM_API-}"
 ORIG_BREW_REMOTE="${HOMEBREW_BREW_GIT_REMOTE-}"
 
 CORE_GIT_REMOTE="https://github.com/d4rkwyng/intelbrew-core"
-BREW_GIT_URL="https://github.com/Homebrew/brew"
-# FUTURE OPTION (owner decision pending, NOT implemented): install Homebrew/brew
-# itself from a patched fork, https://github.com/d4rkwyng/brew, instead of upstream.
-# If that is ever decided, it would choose BREW_GIT_URL here and change what
-# check_brew_remote() below treats as "upstream". Until then the installer always
-# clones upstream brew and only offers to move a brew fork back to upstream.
+BREW_GIT_REMOTE="https://github.com/d4rkwyng/brew"     # Homebrew/brew + Intelbrew patch
+UPSTREAM_BREW_URL="https://github.com/Homebrew/brew"   # only read, for the lag check
 PREFIX="${INTELBREW_PREFIX:-/usr/local}"
 REPOSITORY="$PREFIX/Homebrew"
 BREW="$PREFIX/bin/brew"
@@ -69,13 +80,14 @@ MARK_BEGIN="# >>> intelbrew >>>"
 MARK_END="# <<< intelbrew <<<"
 LINE_API="export HOMEBREW_NO_INSTALL_FROM_API=1"
 LINE_REMOTE="export HOMEBREW_CORE_GIT_REMOTE=\"$CORE_GIT_REMOTE\""
+LINE_BREW="export HOMEBREW_BREW_GIT_REMOTE=\"$BREW_GIT_REMOTE\""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 ASSUME_YES="${INTELBREW_YES:-0}"
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,43p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n '2,58p' "$0" 2>/dev/null || true; exit 0 ;;
     *) printf 'Error: unknown option: %s\n' "$arg" >&2; exit 2 ;;
   esac
 done
@@ -186,9 +198,9 @@ fi
 
 # brew.env files override the shell environment (bin/brew), so a conflicting value
 # there would silently undo everything below. Refuse rather than edit them.
+is_brew_fork() { [[ "$(lower "$(normalize_url "$1")")" == "$(lower "$BREW_GIT_REMOTE")" ]]; }
 if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then user_env="$XDG_CONFIG_HOME/homebrew/brew.env"
 else user_env="$HOME/.homebrew/brew.env"; fi
-brew_env_remotes=()
 for envfile in /etc/homebrew/brew.env "$PREFIX/etc/homebrew/brew.env" "$user_env"; do
   [[ -r "$envfile" ]] || continue
   while IFS= read -r line; do
@@ -197,9 +209,10 @@ for envfile in /etc/homebrew/brew.env "$PREFIX/etc/homebrew/brew.env" "$user_env
         v="${line#HOMEBREW_CORE_GIT_REMOTE=}"; v="${v%\"}"; v="${v#\"}"
         [[ "$(normalize_url "$v")" == "$CORE_GIT_REMOTE" ]] \
           || die "$envfile sets HOMEBREW_CORE_GIT_REMOTE=$v, which overrides your shell profile. Remove that line or set it to $CORE_GIT_REMOTE, then run this again." ;;
-      HOMEBREW_BREW_GIT_REMOTE=*)   # reported by check_brew_remote; never edited
+      HOMEBREW_BREW_GIT_REMOTE=*)
         v="${line#HOMEBREW_BREW_GIT_REMOTE=}"; v="${v%\"}"; v="${v#\"}"
-        brew_env_remotes+=("$envfile: $v") ;;
+        is_brew_fork "$v" \
+          || die "$envfile sets HOMEBREW_BREW_GIT_REMOTE=$v, which overrides your shell profile. Remove that line or set it to $BREW_GIT_REMOTE, then run this again." ;;
     esac
   done <"$envfile"
 done
@@ -228,33 +241,42 @@ scan_files=("$zdot/.zshenv" "$zdot/.zprofile" "$zdot/.zshrc" "$zdot/.zlogin"
             "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc")
 
 # Writes to $2 the new content of profile $1: every HOMEBREW_CORE_GIT_REMOTE= /
-# HOMEBREW_NO_INSTALL_FROM_API= assignment is rewritten to the Intelbrew value, later
-# duplicates are dropped, and (if $3 = append) missing lines are appended in a block.
-# If the user accepted resetting brew to upstream (reset_brew=1), every
-# HOMEBREW_BREW_GIT_REMOTE= assignment is removed too (upstream is brew's default).
-reset_brew=0
+# HOMEBREW_NO_INSTALL_FROM_API= / HOMEBREW_BREW_GIT_REMOTE= assignment is rewritten to
+# the Intelbrew value and later duplicates are dropped. If $3 = append, missing lines
+# go inside an existing intelbrew block, or else into a new block at the end.
+# (Two passes over the file: the first only notes which settings it has.)
 rewrite_profile() {
   local src="$1" out="$2" mode="$3"
   if [[ -e "$src" ]]; then
-    awk -v lr="$LINE_REMOTE" -v la="$LINE_API" -v mode="$mode" \
-        -v mb="$MARK_BEGIN" -v me="$MARK_END" -v dropbrew="$reset_brew" '
+    awk -v lr="$LINE_REMOTE" -v la="$LINE_API" -v lb="$LINE_BREW" -v mode="$mode" \
+        -v mb="$MARK_BEGIN" -v me="$MARK_END" '
+      BEGIN { order = "a r b"; split(order, keys, " "); line["a"] = la; line["r"] = lr; line["b"] = lb }
       function indent(s) { match(s, /^[ \t]*/); return substr(s, 1, RLENGTH) }
-      dropbrew == 1 && /^[ \t]*(export[ \t]+)?HOMEBREW_BREW_GIT_REMOTE=/ { next }
-      /^[ \t]*(export[ \t]+)?HOMEBREW_CORE_GIT_REMOTE=/ {
-        if (!seen_r++) print indent($0) lr; next }
-      /^[ \t]*(export[ \t]+)?HOMEBREW_NO_INSTALL_FROM_API=/ {
-        if (!seen_a++) print indent($0) la; next }
-      { print }
+      function kind(s) {
+        if (s ~ /^[ \t]*(export[ \t]+)?HOMEBREW_CORE_GIT_REMOTE=/) return "r"
+        if (s ~ /^[ \t]*(export[ \t]+)?HOMEBREW_NO_INSTALL_FROM_API=/) return "a"
+        if (s ~ /^[ \t]*(export[ \t]+)?HOMEBREW_BREW_GIT_REMOTE=/) return "b"
+        return ""
+      }
+      NR == FNR { k = kind($0); if (k != "") has[k] = 1; next }
+      {
+        k = kind($0)
+        if (k != "") { if (!seen[k]++) print indent($0) line[k]; next }
+        if (mode == "append" && $0 == me && !filled) {
+          filled = 1
+          for (i = 1; i <= 3; i++) if (!has[keys[i]]) { print line[keys[i]]; has[keys[i]] = 1 }
+        }
+        print
+      }
       END {
-        if (mode == "append" && (!seen_r || !seen_a)) {
+        if (mode == "append" && (!has["r"] || !has["a"] || !has["b"])) {
           print ""; print mb
-          if (!seen_a) print la
-          if (!seen_r) print lr
+          for (i = 1; i <= 3; i++) if (!has[keys[i]]) print line[keys[i]]
           print me
         }
-      }' "$src" >"$out"
+      }' "$src" "$src" >"$out"
   elif [[ "$mode" == "append" ]]; then
-    printf '%s\n%s\n%s\n%s\n' "$MARK_BEGIN" "$LINE_API" "$LINE_REMOTE" "$MARK_END" >"$out"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$MARK_BEGIN" "$LINE_API" "$LINE_REMOTE" "$LINE_BREW" "$MARK_END" >"$out"
   else
     : >"$out"
   fi
@@ -411,61 +433,77 @@ else
   core_action=tap
 fi
 
-# ---- 3b. Homebrew/brew itself from a fork? -----------------------------------------
-# HOMEBREW_BREW_GIT_REMOTE (env, profile or brew.env) or the origin of the brew
-# checkout can point Homebrew/brew itself at a fork, e.g. d4rkwyng/brew, which may be
-# far behind upstream. `brew update` keeps such an origin, and re-applies the variable
-# whenever it is set (cmd/update.sh). Warn always; offer the reset only interactively.
-is_upstream_brew() { [[ "$(lower "$(normalize_url "$1")")" == "$(lower "$BREW_GIT_URL")" ]]; }
-brew_fork_sources=()   # "where: what", for the warning
-brew_fork_profiles=0   # profile lines we could remove
-brew_origin_fix=0      # brew checkout origin we could reset
-brew_repo=""
-if [[ -n "$ORIG_BREW_REMOTE" ]] && ! is_upstream_brew "$ORIG_BREW_REMOTE"; then
-  brew_fork_sources+=("this shell's environment: HOMEBREW_BREW_GIT_REMOTE=$ORIG_BREW_REMOTE")
+# ---- 3b. Homebrew/brew itself: the Intelbrew brew fork ---------------------------
+# d4rkwyng/brew is the EXPECTED Homebrew/brew remote. Upstream, any other fork, or no
+# origin at all is switched to it as a normal planned change (shown in the plan and
+# confirmed with the rest). The fork carries its own N.N.N tags: upstream release X
+# merged with the Intelbrew patch (it is kept up to date by merges, never rebases).
+export HOMEBREW_BREW_GIT_REMOTE="$BREW_GIT_REMOTE"
+
+stable_tags() {  # stdin: `git ls-remote --tags` or `git tag --list`; stdout: N.N.N, oldest first
+  sed -n -E 's#^.*refs/tags/##; s#\^\{\}$##; /^[0-9]+\.[0-9]+\.[0-9]+$/p' \
+    | sort -u -t. -k1,1n -k2,2n -k3,3n
+}
+version_gt() {  # version_gt A B: is N.N.N A newer than B?
+  [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$1" ]]
+}
+
+fork_lsr="$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags "$BREW_GIT_REMOTE" 2>"$tmpdir/fork-lsr.err" || true)"
+fork_tag="$(stable_tags <<<"$fork_lsr" | tail -1)"
+fork_tag_sha=""
+if [[ -n "$fork_tag" ]]; then
+  # Peeled commit for an annotated tag ("<sha>\trefs/tags/X^{}"), else the tag's own line.
+  fork_tag_sha="$(awk -v t="refs/tags/$fork_tag" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }' <<<"$fork_lsr")"
+  # Lag check, lightweight: tag names only. The sync workflow keeps the fork at most one
+  # release behind; more than that means it is stuck (e.g. a merge conflict).
+  up_tags="$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags "$UPSTREAM_BREW_URL" 2>/dev/null | stable_tags || true)"
+  if [[ -z "$up_tags" ]]; then
+    warn "Could not read upstream Homebrew/brew's release tags ($UPSTREAM_BREW_URL), so the fork's lag was not checked."
+  else
+    up_newest="$(tail -1 <<<"$up_tags")"
+    behind=0
+    while IFS= read -r t; do
+      if version_gt "$t" "$fork_tag"; then behind=$((behind + 1)); fi
+    done <<<"$up_tags"
+    if (( behind > 1 )); then
+      warn "The Intelbrew brew fork's newest release is $fork_tag, $behind releases behind upstream Homebrew $up_newest. You will get brew $fork_tag until it catches up; please report this at https://github.com/d4rkwyng/intelbrew/issues."
+    fi
+  fi
 fi
-for f in "${scan_files[@]}"; do
-  [[ -r "$f" ]] || continue
-  while IFS= read -r v; do
-    if [[ -z "$v" ]] || is_upstream_brew "$v"; then continue; fi
-    brew_fork_sources+=("$f: HOMEBREW_BREW_GIT_REMOTE=$v")
-    brew_fork_profiles=1
-  done < <(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?HOMEBREW_BREW_GIT_REMOTE=//p' "$f" \
-             | sed -E "s/[[:space:]]*(#.*)?\$//; s/^[\"']//; s/[\"']\$//")
-done
-brew_env_fork=0
-for e in ${brew_env_remotes[@]+"${brew_env_remotes[@]}"}; do
-  is_upstream_brew "${e#*: }" && continue
-  brew_fork_sources+=("$e (brew.env: not edited by this installer)")
-  brew_env_fork=1
-done
+
+brew_action=none   # none | clone | switch | checkout
+brew_repo="$REPOSITORY"
+brew_origin=""
+stale_tags=()      # local N.N.N tags newer than the fork's newest: upstream's, unpatched
 if [[ "$mode" == "existing" ]]; then
   brew_repo="$("$BREW" --repository 2>/dev/null || true)"
   [[ -d "$brew_repo/.git" ]] || brew_repo="$REPOSITORY"
-  brew_origin="$(origin_of "$brew_repo")"
-  if [[ -n "$brew_origin" ]] && ! is_upstream_brew "$brew_origin"; then
-    brew_fork_sources+=("origin of $brew_repo: $brew_origin")
-    brew_origin_fix=1
+  brew_origin="$(git -C "$brew_repo" config --get remote.origin.url 2>/dev/null || true)"
+  if ! is_brew_fork "$brew_origin" && ! is_brew_fork "$(origin_of "$brew_repo")"; then
+    brew_action=switch
   fi
-fi
-if (( ${#brew_fork_sources[@]} > 0 )); then
-  warn "Homebrew itself (Homebrew/brew, not the formulae) is set to come from a fork, not $BREW_GIT_URL:"
-  printf '    %s\n' "${brew_fork_sources[@]}" >&2
-  printf '  A fork can be far behind upstream brew (missing fixes), and "brew update" keeps\n  you on it. Intelbrew only needs upstream brew.\n' >&2
-  if (( brew_fork_profiles || brew_origin_fix )); then
-    if offer "Reset Homebrew/brew to upstream ($BREW_GIT_URL)?"; then
-      reset_brew=1
-    else
-      if [[ "$ASSUME_YES" == "1" ]]; then
-        say "Leaving Homebrew/brew as it is. To reset it later, run this installer again without --yes."
-      else
-        say "Leaving Homebrew/brew as it is. To reset it later, run this installer again and answer y."
-      fi
+  if [[ -n "$fork_tag" ]]; then
+    while IFS= read -r t; do
+      if [[ -n "$t" ]] && version_gt "$t" "$fork_tag"; then stale_tags+=("$t"); fi
+    done < <(git -C "$brew_repo" tag --list 2>/dev/null | stable_tags)
+    if [[ "$brew_action" == none ]] &&
+       { [[ "$(git -C "$brew_repo" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)" != "$fork_tag_sha" ]] ||
+         (( ${#stale_tags[@]} > 0 )); }; then
+      brew_action=checkout
     fi
   fi
-  if (( brew_env_fork )); then
-    warn "A brew.env file sets HOMEBREW_BREW_GIT_REMOTE and overrides everything else; remove that line yourself to use upstream brew."
+  if [[ "$brew_action" != none ]]; then
+    [[ -n "$fork_tag" ]] \
+      || die "Could not read release tags from $BREW_GIT_REMOTE ($(head -1 "$tmpdir/fork-lsr.err" 2>/dev/null)). Check your network, then run this again. Nothing was changed."
+    [[ -z "$(git -C "$brew_repo" status --porcelain --untracked-files=no 2>/dev/null)" ]] \
+      || die "$brew_repo (Homebrew/brew) has uncommitted changes. Commit, stash or discard them, then run this again. Nothing was changed."
+  elif [[ -z "$fork_tag" ]]; then
+    warn "Could not read release tags from $BREW_GIT_REMOTE; leaving Homebrew/brew as it is."
   fi
+else
+  [[ -n "$fork_tag" ]] \
+    || die "Could not read release tags from $BREW_GIT_REMOTE ($(head -1 "$tmpdir/fork-lsr.err" 2>/dev/null)). Check your network, then run this again. Nothing was changed."
+  brew_action=clone
 fi
 
 plan_profiles
@@ -586,35 +624,38 @@ action_box() {
     lines+=("" "This terminal does not have HOMEBREW_CORE_GIT_REMOTE set.")
   fi
   [[ "$ORIG_API" == "1" ]] || lines+=("This terminal does not have HOMEBREW_NO_INSTALL_FROM_API=1.")
-  if (( reset_brew )) && [[ -n "$ORIG_BREW_REMOTE" ]] && ! is_upstream_brew "$ORIG_BREW_REMOTE"; then
-    lines+=("This terminal still has HOMEBREW_BREW_GIT_REMOTE=$ORIG_BREW_REMOTE")
+  if [[ -n "$ORIG_BREW_REMOTE" ]] && ! is_brew_fork "$ORIG_BREW_REMOTE"; then
+    lines+=("This terminal has a DIFFERENT HOMEBREW_BREW_GIT_REMOTE:" "  $ORIG_BREW_REMOTE")
+  elif [[ -z "$ORIG_BREW_REMOTE" ]]; then
+    lines+=("This terminal does not have HOMEBREW_BREW_GIT_REMOTE set.")
   fi
   lines+=("")
   lines+=("In every open window, run:    exec ${SHELL:-/bin/zsh} -l")
   lines+=("or close it and open a new window. Then check:")
-  lines+=("  brew config | grep -E 'CORE_GIT_REMOTE|NO_INSTALL_FROM_API'")
+  lines+=("  brew config | grep -E 'GIT_REMOTE|NO_INSTALL_FROM_API'")
   lines+=("Expected output:")
+  lines+=("  HOMEBREW_BREW_GIT_REMOTE: $BREW_GIT_REMOTE")
   lines+=("  HOMEBREW_CORE_GIT_REMOTE: $CORE_GIT_REMOTE")
   lines+=("  HOMEBREW_NO_INSTALL_FROM_API: set")
-  (( reset_brew )) && lines+=("and \`brew config | grep BREW_GIT_REMOTE\` should print nothing.")
   rule="+$(printf '%76s' '' | tr ' ' '=')+"
   printf '\n%s\n' "$rule"
   for l in "${lines[@]}"; do printf '| %-74s |\n' "$l"; done
   printf '%s\n' "$rule"
 }
 
-env_is_current() {  # does the shell that started the installer already have both?
-  [[ "$(normalize_url "$ORIG_CORE_REMOTE")" == "$CORE_GIT_REMOTE" && "$ORIG_API" == "1" ]]
+env_is_current() {  # does the shell that started the installer already have all three?
+  [[ "$(normalize_url "$ORIG_CORE_REMOTE")" == "$CORE_GIT_REMOTE" && "$ORIG_API" == "1" ]] &&
+    is_brew_fork "$ORIG_BREW_REMOTE"
 }
 
 say "macOS $macos, $arch. Homebrew: $mode install at $PREFIX."
-if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$reset_brew" == 0 ]]; then
+if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$brew_action" == none ]]; then
   if (( ${#targets[@]} > 0 )); then
-    say "Already set up: homebrew/core comes from $CORE_GIT_REMOTE and ${targets[*]} has both settings. Nothing to change."
+    say "Already set up: Homebrew/brew comes from $BREW_GIT_REMOTE${fork_tag:+ ($fork_tag)}, homebrew/core from $CORE_GIT_REMOTE, and ${targets[*]} has all three settings. Nothing to change."
   else
-    say "homebrew/core already comes from $CORE_GIT_REMOTE. Nothing to change."
+    say "Homebrew/brew already comes from $BREW_GIT_REMOTE and homebrew/core from $CORE_GIT_REMOTE. Nothing to change."
     warn "Unrecognised login shell (${SHELL:-unset}). Make sure its startup file has:"
-    printf '  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE"
+    printf '  %s\n  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE" "$LINE_BREW"
   fi
   [[ "$mode" != "existing" ]] || report_installed
   env_is_current || action_box
@@ -622,15 +663,35 @@ if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$reset_brew" 
 fi
 
 need_update=0
-[[ "$core_action" == "none" && "$reset_brew" == 0 ]] || need_update=1
+[[ "$core_action" == "none" && "$brew_action" == none ]] || need_update=1
 
 say "Plan:"
 if [[ "$mode" == "fresh" ]]; then
   (( ${#missing[@]} == 0 ))    || printf '  create, owned by %s:admin (sudo if %s is not writable): %s\n' "$USER" "$PREFIX" "${missing[*]}"
   (( ${#unwritable[@]} == 0 )) || printf '  change owner to %s:admin, not recursive (sudo): %s\n' "$USER" "${unwritable[*]}"
-  printf '  git clone %s %s\n' "$BREW_GIT_URL" "$REPOSITORY"
+  printf '  git clone %s %s\n' "$BREW_GIT_REMOTE" "$REPOSITORY"
+  printf '    and check out its newest release tag %s as branch "stable" (as brew update does)\n' "$fork_tag"
   printf '  ln -s ../Homebrew/bin/brew %s\n' "$BREW"
 fi
+case "$brew_action" in
+  switch|checkout)
+    printf '  in %s (Homebrew/brew):\n' "$brew_repo"
+    if [[ "$brew_action" == switch ]]; then
+      if [[ -z "$brew_origin" ]]; then
+        printf '    set origin to %s (none set)\n' "$BREW_GIT_REMOTE"
+      elif [[ "$(lower "$(normalize_url "$brew_origin")")" == "$(lower "$UPSTREAM_BREW_URL")" ]]; then
+        printf '    set origin to %s (was upstream %s)\n' "$BREW_GIT_REMOTE" "$brew_origin"
+      else
+        printf '    set origin to %s (was a different Homebrew/brew fork: %s)\n' "$BREW_GIT_REMOTE" "$brew_origin"
+      fi
+    fi
+    if (( ${#stale_tags[@]} > 0 )); then
+      printf '    delete local tags newer than the fork'"'"'s %s (upstream'"'"'s unpatched copies, which\n' "$fork_tag"
+      printf '    brew update would otherwise pick): %s\n' "${stale_tags[*]}"
+    fi
+    printf '    fetch its tags and check out release tag %s as branch "stable" (as brew update\n' "$fork_tag"
+    printf '    does; tracked files are clean, checked above)\n' ;;
+esac
 case "$core_action" in
   tap)    printf '  brew tap homebrew/core: full clone of %s (about 1.3 GB)\n' "$CORE_GIT_REMOTE" ;;
   switch) printf '  in %s:\n' "$core"
@@ -638,14 +699,11 @@ case "$core_action" in
           printf '    fetch it and check out its main: local branch "main" is reset to origin/main;\n'
           printf '    any local commits on it are discarded (the tree is clean, checked above)\n' ;;
 esac
-if (( reset_brew && brew_origin_fix )); then
-  printf '  in %s: set origin to %s (was %s)\n' "$brew_repo" "$BREW_GIT_URL" "$brew_origin"
-fi
 if (( ${#targets[@]} > 0 )); then
   show_profile_plan
 else
-  warn "Unrecognised login shell (${SHELL:-unset}). Add these two lines to its startup file yourself:"
-  printf '  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE"
+  warn "Unrecognised login shell (${SHELL:-unset}). Add these three lines to its startup file yourself:"
+  printf '  %s\n  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE" "$LINE_BREW"
   (( ${#profile_changes[@]} == 0 )) || show_profile_plan
 fi
 (( need_update == 0 )) || printf '  brew update\n'
@@ -667,14 +725,41 @@ if [[ "$mode" == "fresh" ]]; then
     run sudo chmod u+rwx "${unwritable[@]}"
   fi
   # $REPOSITORY was just created empty, so cloning into it is safe.
-  run git clone "$BREW_GIT_URL" "$REPOSITORY"
+  run git clone "$BREW_GIT_REMOTE" "$REPOSITORY"
+  run git -C "$REPOSITORY" checkout --force -B stable "refs/tags/$fork_tag"
   run ln -s ../Homebrew/bin/brew "$BREW"
 fi
+
+verify_brew() {  # origin is the fork and HEAD is its newest release tag
+  local url
+  url="$(git -C "$brew_repo" config --get remote.origin.url 2>/dev/null || true)"
+  is_brew_fork "$url" \
+    || die "Homebrew/brew's origin is '$url', not $BREW_GIT_REMOTE. Setup FAILED."
+  [[ "$(git -C "$brew_repo" rev-parse -q --verify 'HEAD^{commit}')" == "$(git -C "$brew_repo" rev-parse -q --verify "refs/tags/$fork_tag^{commit}")" ]] \
+    || die "Homebrew/brew in $brew_repo is not at the fork's release tag $fork_tag. Setup FAILED."
+  say "Verified: Homebrew/brew origin is $url, at release $fork_tag ($(git -C "$brew_repo" rev-parse --short HEAD))."
+}
+case "$brew_action" in
+  clone) verify_brew ;;
+  switch|checkout)
+    if [[ "$brew_action" == switch ]]; then
+      # Like cmd/update.sh: set the URL and fetch refspec in config (works with no origin).
+      run git -C "$brew_repo" config remote.origin.url "$BREW_GIT_REMOTE"
+      run git -C "$brew_repo" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+    fi
+    # --force: the fork's tag X replaces a local upstream tag X (same as brew update).
+    run git -C "$brew_repo" fetch --force --tags origin
+    for t in ${stale_tags[@]+"${stale_tags[@]}"}; do
+      run git -C "$brew_repo" tag -d "$t"
+    done
+    run git -C "$brew_repo" checkout --force -B stable "refs/tags/$fork_tag"
+    verify_brew ;;
+esac
 [[ "$mode" == "existing" ]] || core="$("$BREW" --repository homebrew/core)"
 
 case "$core_action" in
   tap)
-    say "One-time download: homebrew/core from the fork is about 1.3 GB; expect roughly 5-10 minutes on a normal connection."
+    say "One-time download: homebrew/core from the fork is about 1.3 GB; expect roughly 5-15 minutes on a normal connection."
     # CoreTap#install clones HOMEBREW_CORE_GIT_REMOTE (never shallow).
     run "$BREW" tap homebrew/core ;;
   switch)
@@ -698,20 +783,16 @@ verify_core
 
 apply_profiles
 
-if (( reset_brew )); then
-  # Without the variable, `brew update` leaves an upstream origin alone.
-  unset HOMEBREW_BREW_GIT_REMOTE
-  (( brew_origin_fix == 0 )) || run git -C "$brew_repo" remote set-url origin "$BREW_GIT_URL"
-fi
-
 if (( need_update )); then
   run "$BREW" update
   verify_core   # brew update rewrites the core remote from HOMEBREW_CORE_GIT_REMOTE
-  if (( reset_brew && brew_origin_fix )); then
-    if is_upstream_brew "$(origin_of "$brew_repo")"; then
-      say "Verified: Homebrew/brew origin is $BREW_GIT_URL."
-    else
-      warn "Homebrew/brew's origin is '$(origin_of "$brew_repo")' after brew update, not $BREW_GIT_URL (a brew.env file may set HOMEBREW_BREW_GIT_REMOTE)."
+  if [[ -n "$fork_tag" ]]; then
+    is_brew_fork "$(git -C "$brew_repo" config --get remote.origin.url 2>/dev/null || true)" \
+      || die "Homebrew/brew's origin is '$(origin_of "$brew_repo")' after brew update, not $BREW_GIT_REMOTE. Setup FAILED."
+    if [[ "$(git -C "$brew_repo" rev-parse -q --verify 'HEAD^{commit}')" != "$(git -C "$brew_repo" rev-parse -q --verify "refs/tags/$fork_tag^{commit}" 2>/dev/null || true)" ]]; then
+      # cmd/update.sh ~595-602: developers (HOMEBREW_DEVELOPER, or after any developer
+      # command) follow the fork's default branch, not its release tags.
+      warn "After brew update, Homebrew/brew is at $(git -C "$brew_repo" describe --tags --always 2>/dev/null), not the fork's release tag $fork_tag. If you have HOMEBREW_DEVELOPER set or have run a developer command, brew update follows the fork's default branch instead of release tags."
     fi
   fi
 fi
@@ -720,8 +801,8 @@ fi
 # including a NON-login one (tmux, IDE terminals), or brew silently uses the
 # upstream API feed instead of Intelbrew. Check in fresh child shells.
 # shellcheck disable=SC2016  # the $VARs are expanded by the child shell
-probe='printf "%s|%s" "$HOMEBREW_CORE_GIT_REMOTE" "$HOMEBREW_NO_INSTALL_FROM_API"'
-shell_sees() {  # shell_sees login|nonlogin: prints "<remote>|<api>" as that shell sees them
+probe='printf "%s|%s|%s" "$HOMEBREW_CORE_GIT_REMOTE" "$HOMEBREW_NO_INSTALL_FROM_API" "$HOMEBREW_BREW_GIT_REMOTE"'
+shell_sees() {  # shell_sees login|nonlogin: prints "<core>|<api>|<brew>" as that shell sees them
   local zd=()
   [[ -n "${ZDOTDIR:-}" ]] && zd=("ZDOTDIR=$ZDOTDIR")
   case "${SHELL:-}:$1" in
@@ -734,10 +815,13 @@ shell_sees() {  # shell_sees login|nonlogin: prints "<remote>|<api>" as that she
 if (( ${#targets[@]} > 0 )); then
   for how in login nonlogin; do
     seen="$(shell_sees "$how" || true)"
-    if [[ "$(normalize_url "${seen%%|*}")" != "$CORE_GIT_REMOTE" || "${seen#*|}" != "1" ]]; then
-      warn "A new $how ${SHELL##*/} shell does not see both settings (got '${seen:-nothing}'). Something later in your startup files may override them; check with: grep -n HOMEBREW_ ~/.z* ~/.bash* ~/.profile"
+    seen_core="${seen%%|*}"; seen_rest="${seen#*|}"
+    seen_api="${seen_rest%%|*}"; seen_brew="${seen_rest#*|}"
+    if [[ "$(normalize_url "$seen_core")" != "$CORE_GIT_REMOTE" || "$seen_api" != "1" ]] ||
+       ! is_brew_fork "$seen_brew"; then
+      warn "A new $how ${SHELL##*/} shell does not see all three settings (got '${seen:-nothing}'). Something later in your startup files may override them; check with: grep -n HOMEBREW_ ~/.z* ~/.bash* ~/.profile"
     else
-      say "Checked: a new $how ${SHELL##*/} shell sees both settings."
+      say "Checked: a new $how ${SHELL##*/} shell sees all three settings."
     fi
   done
 fi

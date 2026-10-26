@@ -1,9 +1,9 @@
 #!/bin/bash
 # Offline tests for install.sh. Never touches the real HOME, Homebrew or network:
 # each case gets a temp HOME and prefix, stub uname/sw_vers/sysctl/xcode-select/
-# pkgutil/sudo/brew on PATH, and a git wrapper that fakes the Homebrew/brew clone
-# and otherwise runs real git against temp repos (the fork URL is rewritten to a
-# local bare repo with url.insteadOf).
+# pkgutil/sudo/brew on PATH, and a git wrapper that logs and runs real git against
+# temp repos (the core fork, upstream core, the brew fork and upstream brew URLs are
+# rewritten to local bare repos with url.insteadOf).
 #
 #   bash tests/test_install.sh
 # shellcheck disable=SC2016  # single-quoted $VARs are expanded by child shells
@@ -75,9 +75,6 @@ S
 cat >"$STUBS/git" <<S
 #!/bin/bash
 echo "git \$*" >>"\$STUB_LOG"
-if [[ "\${1:-}" == clone && "\${2:-}" == https://github.com/Homebrew/brew ]]; then
-  mkdir -p "\$3/bin" && "$REAL_GIT" init -q "\$3" && cp "$STUBS/brew-impl" "\$3/bin/brew" && exit 0
-fi
 exec "$REAL_GIT" "\$@"
 S
 cat >"$STUBS/brew-impl" <<S
@@ -96,14 +93,39 @@ case "\$*" in
     echo "brewenv BREW_GIT_REMOTE=\${HOMEBREW_BREW_GIT_REMOTE:-}" >>"\$STUB_LOG"
     # cmd/update.sh: a non-default HOMEBREW_BREW_GIT_REMOTE becomes brew's origin.
     if [[ -n "\${HOMEBREW_BREW_GIT_REMOTE:-}" && "\$HOMEBREW_BREW_GIT_REMOTE" != https://github.com/Homebrew/brew ]]; then
-      "$REAL_GIT" -C "\$INTELBREW_PREFIX/Homebrew" remote set-url origin "\$HOMEBREW_BREW_GIT_REMOTE" 2>/dev/null \
-        || "$REAL_GIT" -C "\$INTELBREW_PREFIX/Homebrew" remote add origin "\$HOMEBREW_BREW_GIT_REMOTE"
+      "$REAL_GIT" -C "\$INTELBREW_PREFIX/Homebrew" config remote.origin.url "\$HOMEBREW_BREW_GIT_REMOTE"
     fi
+    [[ -z "\${STUB_UPDATE_BREW_REF:-}" ]] || "$REAL_GIT" -C "\$INTELBREW_PREFIX/Homebrew" checkout -q --force "\$STUB_UPDATE_BREW_REF"
     [[ -z "\${STUB_UPDATE_ORIGIN:-}" ]] || "$REAL_GIT" -C "\$core" remote set-url origin "\$STUB_UPDATE_ORIGIN" ;;
   *) echo "brew stub: unhandled: \$*" >&2; exit 1 ;;
 esac
 S
 chmod +x "$STUBS"/*
+
+# ---- Homebrew/brew: upstream and the Intelbrew fork ------------------------------
+# upstream: releases 7.0.10, 7.0.11 (lightweight tags, like Homebrew's). The fork starts
+# as a copy (main stays old, as a GitHub fork's does), then carries `intelbrew` = 7.0.11 +
+# the banner patch, and its OWN tag 7.0.11 on that commit.
+BREW_UP_URL="https://github.com/Homebrew/brew"
+BREW_FORK="https://github.com/d4rkwyng/brew"
+"$REAL_GIT" config --file "$GIT_CONFIG_GLOBAL" url."file://$ROOT/brewfork.git".insteadOf "$BREW_FORK"
+"$REAL_GIT" config --file "$GIT_CONFIG_GLOBAL" url."file://$ROOT/brewup.git".insteadOf "$BREW_UP_URL"
+"$REAL_GIT" init -q "$ROOT/brewsrc"
+mkdir -p "$ROOT/brewsrc/bin"; cp "$STUBS/brew-impl" "$ROOT/brewsrc/bin/brew"
+echo "7.0.10" >"$ROOT/brewsrc/VERSION"
+"$REAL_GIT" -C "$ROOT/brewsrc" add -A; "$REAL_GIT" -C "$ROOT/brewsrc" commit -qm "brew 7.0.10"
+"$REAL_GIT" -C "$ROOT/brewsrc" tag 7.0.10
+"$REAL_GIT" clone -q --bare "$ROOT/brewsrc" "$ROOT/brewfork.git"      # fork: main + 7.0.10
+echo "7.0.11" >"$ROOT/brewsrc/VERSION"
+"$REAL_GIT" -C "$ROOT/brewsrc" commit -qam "brew 7.0.11"; "$REAL_GIT" -C "$ROOT/brewsrc" tag 7.0.11
+"$REAL_GIT" clone -q --bare "$ROOT/brewsrc" "$ROOT/brewup.git"
+"$REAL_GIT" -C "$ROOT/brewsrc" checkout -q -b intelbrew
+echo "intelbrew banner patch" >"$ROOT/brewsrc/PATCH"
+"$REAL_GIT" -C "$ROOT/brewsrc" add PATCH; "$REAL_GIT" -C "$ROOT/brewsrc" commit -qm "Intelbrew banner"
+"$REAL_GIT" -C "$ROOT/brewsrc" push -q "$ROOT/brewfork.git" intelbrew "intelbrew:refs/tags/7.0.11"
+BREW_UP_TAG="$("$REAL_GIT" -C "$ROOT/brewup.git" rev-parse 7.0.11)"
+BREW_FORK_TAG="$("$REAL_GIT" -C "$ROOT/brewfork.git" rev-parse 7.0.11)"
+BREW_FORK_MAIN="$("$REAL_GIT" -C "$ROOT/brewfork.git" rev-parse main)"
 
 # ---- harness ---------------------------------------------------------------------
 new_case() {   # fresh HOME + prefix for one test case; sets T, H, P, LOG
@@ -119,9 +141,20 @@ run_install() {  # run_install [extra env...]; output in $OUT, status in $RC
   RC=$?
 }
 make_existing() {  # existing /usr/local-style install; $1 = core origin or "none"
-  mkdir -p "$P/bin" "$P/Homebrew/bin"
-  "$REAL_GIT" init -q "$P/Homebrew"
-  cp "$STUBS/brew-impl" "$P/Homebrew/bin/brew"
+  # $2 = Homebrew/brew: fork (default: the fork at its 7.0.11, i.e. set up), upstream
+  # (upstream at 7.0.11), bare (git init, no origin), or any URL (upstream's tree, that origin)
+  mkdir -p "$P/bin"
+  case "${2:-fork}" in
+    fork)     "$REAL_GIT" clone -q "$BREW_FORK" "$P/Homebrew"
+              "$REAL_GIT" -C "$P/Homebrew" checkout -q --force -B stable refs/tags/7.0.11 ;;
+    upstream) "$REAL_GIT" clone -q "$BREW_UP_URL" "$P/Homebrew"
+              "$REAL_GIT" -C "$P/Homebrew" checkout -q --force -B stable refs/tags/7.0.11 ;;
+    bare)     mkdir -p "$P/Homebrew/bin"; "$REAL_GIT" init -q "$P/Homebrew"
+              cp "$STUBS/brew-impl" "$P/Homebrew/bin/brew" ;;
+    *)        "$REAL_GIT" clone -q "$BREW_UP_URL" "$P/Homebrew"
+              "$REAL_GIT" -C "$P/Homebrew" checkout -q --force -B stable refs/tags/7.0.11
+              "$REAL_GIT" -C "$P/Homebrew" remote set-url origin "$2" ;;
+  esac
   ln -s ../Homebrew/bin/brew "$P/bin/brew"
   if [[ "$1" != none ]]; then
     local core="$P/Homebrew/Library/Taps/homebrew/homebrew-core"
@@ -134,7 +167,9 @@ snapshot() { (cd "$T" && find home prefix -type f -o -type l | sort | while read
   printf '%s ' "$f"; if [[ -L "$f" ]]; then readlink "$f"; else cksum <"$f"; fi; done
   "$REAL_GIT" -C "$(core_dir)" config --get remote.origin.url 2>/dev/null
   "$REAL_GIT" -C "$(core_dir)" rev-parse HEAD 2>/dev/null
-  "$REAL_GIT" -C "$P/Homebrew" config --get remote.origin.url 2>/dev/null); }
+  "$REAL_GIT" -C "$P/Homebrew" config --get remote.origin.url 2>/dev/null
+  "$REAL_GIT" -C "$P/Homebrew" rev-parse HEAD 2>/dev/null
+  "$REAL_GIT" -C "$P/Homebrew" tag --list 2>/dev/null); }
 
 CASE=""; case_ok=1
 start() { CASE="$1"; case_ok=1; new_case; }
@@ -157,13 +192,30 @@ no_backups() { [[ -z "$(find "$H" -name '*.intelbrew-backup-*')" ]]; }
 
 LINE_REMOTE="export HOMEBREW_CORE_GIT_REMOTE=\"$FORK_URL\""
 LINE_API="export HOMEBREW_NO_INSTALL_FROM_API=1"
+LINE_BREW="export HOMEBREW_BREW_GIT_REMOTE=\"$BREW_FORK\""
+ALL3="$LINE_API
+$LINE_REMOTE
+$LINE_BREW"
+brew_origin() { "$REAL_GIT" -C "$P/Homebrew" config --get remote.origin.url; }
+brew_head() { "$REAL_GIT" -C "$P/Homebrew" rev-parse HEAD; }
+brew_at_fork_tag() { [[ "$(brew_origin)" == "$BREW_FORK" && "$(brew_head)" == "$BREW_FORK_TAG" &&
+  "$("$REAL_GIT" -C "$P/Homebrew" symbolic-ref --short HEAD)" == stable ]]; }
+CUR_ENV=(HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1 HOMEBREW_BREW_GIT_REMOTE="$BREW_FORK")
 
 # ---- cases ---------------------------------------------------------------------
 start "fresh Mac, zsh: installs, taps fork, writes .zshenv"
 run_install
 check "exit 0" test "$RC" -eq 0
 check "brew symlink" test -L "$P/bin/brew"
-check "brew cloned" logged "git clone https://github.com/Homebrew/brew $P/Homebrew"
+check "brew cloned from the fork" logged "git clone $BREW_FORK $P/Homebrew"
+check "brew at the fork's release tag, branch stable" brew_at_fork_tag
+check "not upstream's 7.0.11" test "$(brew_head)" != "$BREW_UP_TAG"
+check "plan names the tag" has "and check out its newest release tag 7.0.11"
+check "verified brew" has "Verified: Homebrew/brew origin is $BREW_FORK, at release 7.0.11"
+check "brew update env has the fork" grep -qx "brewenv BREW_GIT_REMOTE=$BREW_FORK" "$LOG"
+check ".zshenv has brew remote once" test "$(count '^export HOMEBREW_BREW_GIT_REMOTE=' "$H/.zshenv")" = 1
+check ".zshenv exact brew line" grep -qxF "$LINE_BREW" "$H/.zshenv"
+check "non-login zsh sees brew remote" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_BREW_GIT_REMOTE"')" = "$BREW_FORK"
 check "tap ran with env" logged "brew tap homebrew/core [API=1 REMOTE=$FORK_URL]"
 check "core origin is fork" remote_is "$FORK_URL"
 check "brew update ran" logged "brew update"
@@ -174,7 +226,7 @@ check "no .zprofile created" test ! -e "$H/.zprofile"
 # The real-world bug: a NON-login zsh (tmux, IDE terminals) never read .zprofile.
 check "non-login zsh sees remote" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_CORE_GIT_REMOTE"')" = "$FORK_URL"
 check "non-login zsh sees api" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_NO_INSTALL_FROM_API"')" = 1
-check "installer checked non-login shell" has "a new nonlogin zsh shell sees both settings"
+check "installer checked non-login shell" has "a new nonlogin zsh shell sees all three settings"
 check "no .zshrc created" test ! -e "$H/.zshrc"
 check "no sudo" bash -c "! grep -q '^sudo' '$LOG'"
 before="$(snapshot)"; : >"$LOG"
@@ -264,6 +316,9 @@ SH=/bin/bash run_install
 check "exit 0" test "$RC" -eq 0
 check ".bash_profile remote" grep -qxF "$LINE_REMOTE" "$H/.bash_profile"
 check ".bash_profile api" grep -qxF "$LINE_API" "$H/.bash_profile"
+check ".bash_profile brew" grep -qxF "$LINE_BREW" "$H/.bash_profile"
+check ".bashrc brew" grep -qxF "$LINE_BREW" "$H/.bashrc"
+check "non-login bash sees brew remote" test "$(env -i HOME="$H" bash -ic 'printf %s "$HOMEBREW_BREW_GIT_REMOTE"' 2>/dev/null </dev/null)" = "$BREW_FORK"
 check "no .zprofile" test ! -e "$H/.zprofile"
 before="$(snapshot)"
 SH=/bin/bash run_install
@@ -341,7 +396,7 @@ before_in_output() { local a b; a="$(line_of "$1")"; b="$(line_of "$2")"; [[ -n 
 
 start "item 1: settings only in .zprofile: also written to .zshenv for non-login zsh"
 make_existing "$FORK_URL"
-printf '%s\n%s\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zprofile"
+printf '%s\n' "$ALL3" >"$H/.zprofile"
 cp "$H/.zprofile" "$T/zprofile.orig"
 check "precondition: non-login zsh misses it" test -z "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_CORE_GIT_REMOTE"')"
 run_install
@@ -350,7 +405,7 @@ check ".zshenv has remote" grep -qxF "$LINE_REMOTE" "$H/.zshenv"
 check ".zshenv has api" grep -qxF "$LINE_API" "$H/.zshenv"
 check ".zprofile unchanged" cmp -s "$T/zprofile.orig" "$H/.zprofile"
 check "non-login zsh sees remote" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_CORE_GIT_REMOTE"')" = "$FORK_URL"
-check "installer checked non-login shell" has "a new nonlogin zsh shell sees both settings"
+check "installer checked non-login shell" has "a new nonlogin zsh shell sees all three settings"
 before="$(snapshot)"
 run_install
 check "re-run: no change" test "$before" = "$(snapshot)"
@@ -380,8 +435,8 @@ finish
 
 start "item 3: env already right but core origin still upstream: switches, not 'already set up'"
 make_existing "$UPSTREAM_URL"
-printf '%s\n%s\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zshenv"
-run_install HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+run_install "${CUR_ENV[@]}"
 check "exit 0" test "$RC" -eq 0
 check "not 'already set up'" no_text "Nothing to change"
 check "plan names old origin" has "(was $UPSTREAM_URL)"
@@ -393,7 +448,7 @@ check "HEAD = fork main" test "$("$REAL_GIT" -C "$(core_dir)" rev-parse HEAD)" =
 check "verified" has "Verified: homebrew/core origin is $FORK_URL"
 check "profile untouched" no_backups
 before="$(snapshot)"; : >"$LOG"
-run_install HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+run_install "${CUR_ENV[@]}"
 check "re-run: no change" test "$before" = "$(snapshot)"
 check "re-run: nothing to change" has "Nothing to change"
 check "re-run: no box (this shell is current)" no_text "ACTION NEEDED"
@@ -401,10 +456,10 @@ finish
 
 start "item 3: same state with uncommitted changes in core: refuses"
 make_existing "$UPSTREAM_URL"
-printf '%s\n%s\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zshenv"
+printf '%s\n' "$ALL3" >"$H/.zshenv"
 echo dirty >>"$(core_dir)/Formula.rb"
 before="$(snapshot)"
-run_install HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+run_install "${CUR_ENV[@]}"
 check "nonzero" test "$RC" -ne 0
 check "says uncommitted" has "uncommitted changes"
 check "nothing changed" test "$before" = "$(snapshot)"
@@ -418,14 +473,16 @@ check "names this terminal's stale value" has "This terminal has a DIFFERENT HOM
 check "shows the stale value" has "$STALE"
 check "exec \$SHELL -l" has "exec /bin/zsh -l"
 check "new window" has "open a new window"
-check "brew config check" has "brew config | grep -E 'CORE_GIT_REMOTE|NO_INSTALL_FROM_API'"
+check "brew config check" has "brew config | grep -E 'GIT_REMOTE|NO_INSTALL_FROM_API'"
 check "expected remote" has "HOMEBREW_CORE_GIT_REMOTE: $FORK_URL"
+check "expected brew remote" has "HOMEBREW_BREW_GIT_REMOTE: $BREW_FORK"
+check "names missing brew remote" has "This terminal does not have HOMEBREW_BREW_GIT_REMOTE set."
 check "expected api" has "HOMEBREW_NO_INSTALL_FROM_API: set"
 check "box is the last thing printed" test "$(tail -1 <<<"$OUT" | cut -c1-3)" = "+=="
 run_install HOMEBREW_CORE_GIT_REMOTE="$STALE"
 check "re-run from the same stale shell: still says so" has "This terminal has a DIFFERENT HOMEBREW_CORE_GIT_REMOTE:"
 check "re-run: nothing to change" has "Nothing to change"
-run_install HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+run_install "${CUR_ENV[@]}"
 check "re-run from a new shell: no box" no_text "ACTION NEEDED"
 finish
 
@@ -490,7 +547,7 @@ finish
 start "item 7: one-time size/time notice before the core clone"
 run_install
 check "exit 0" test "$RC" -eq 0
-check "notice" has "One-time download: homebrew/core from the fork is about 1.3 GB; expect roughly 5-10 minutes"
+check "notice" has "One-time download: homebrew/core from the fork is about 1.3 GB; expect roughly 5-15 minutes"
 check "notice before tap command" bash -c "a=\$(grep -n 'One-time download' <<<\"\$0\" | cut -d: -f1); b=\$(grep -n '^+ .*brew tap homebrew/core' <<<\"\$0\" | cut -d: -f1); [[ \$a -lt \$b ]]" "$OUT"
 finish
 
@@ -501,92 +558,180 @@ check "exit 0" test "$RC" -eq 0
 check "no notice" no_text "One-time download"
 finish
 
-brew_fork_state() {  # existing, core on fork, profiles right, brew itself on d4rkwyng/brew
-  make_existing "$FORK_URL"
-  "$REAL_GIT" -C "$P/Homebrew" remote add origin "$BREW_FORK"
-  printf '%s\n%s\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zshenv"
-  printf 'export EDITOR=vim\nexport HOMEBREW_BREW_GIT_REMOTE=%s\n' "$BREW_FORK" >"$H/.zprofile"
-  printf 'export HOMEBREW_BREW_GIT_REMOTE="%s.git"\n' "$BREW_FORK" >"$H/.zshrc"
-}
-brew_origin() { "$REAL_GIT" -C "$P/Homebrew" config --get remote.origin.url; }
-
-start "item 8: brew fork with --yes: warns, changes nothing"
-brew_fork_state
-before="$(snapshot)"
-run_install HOMEBREW_BREW_GIT_REMOTE="$BREW_FORK" HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+# ---- item 8: Homebrew/brew from the Intelbrew brew fork (d4rkwyng/brew) -------------
+start "item 8: brew on upstream: switched to the fork's release tag as a planned change"
+make_existing "$FORK_URL" upstream
+printf '%s\n%s\nexport HOMEBREW_BREW_GIT_REMOTE=%s\n' "$LINE_API" "$LINE_REMOTE" "$BREW_UP_URL" >"$H/.zshenv"
+printf 'export EDITOR=vim\nexport HOMEBREW_BREW_GIT_REMOTE="https://github.com/someone/brew.git"\n' >"$H/.zprofile"
+check "precondition: local upstream tag 7.0.11" test "$(brew_head)" = "$BREW_UP_TAG"
+run_install HOMEBREW_BREW_GIT_REMOTE="$BREW_UP_URL" HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
 check "exit 0" test "$RC" -eq 0
-check "warns: brew from a fork" has "Homebrew itself (Homebrew/brew, not the formulae) is set to come from a fork"
-check "names env" has "this shell's environment: HOMEBREW_BREW_GIT_REMOTE=$BREW_FORK"
-check "names .zprofile" has "$H/.zprofile: HOMEBREW_BREW_GIT_REMOTE=$BREW_FORK"
-check "names .zshrc" has "$H/.zshrc: HOMEBREW_BREW_GIT_REMOTE=$BREW_FORK.git"
-check "names origin" has "origin of $P/Homebrew: $BREW_FORK"
-check "may be behind" has "far behind upstream brew"
-check "--yes declines" has "(no: --yes only makes the required changes)"
-check "nothing changed" test "$before" = "$(snapshot)"
-check "brew origin still fork" test "$(brew_origin)" = "$BREW_FORK"
-check "no brew update" bash -c "! grep -q '^brew update' '$LOG'"
-check "no backups" no_backups
-finish
-
-start "item 8: brew fork, interactive, default (Enter) = No: changes nothing"
-brew_fork_state
-before="$(snapshot)"
-interactive 'S\n\n' HOMEBREW_BREW_GIT_REMOTE="$BREW_FORK"
-check "exit 0" test "$RC" -eq 0
-check "offered" grep -qF "Reset Homebrew/brew to upstream (https://github.com/Homebrew/brew)? [y/N]" "$T/tty.out"
-check "left as is" has "Leaving Homebrew/brew as it is"
-check "nothing changed" test "$before" = "$(snapshot)"
-check "no backups" no_backups
-finish
-
-start "item 8: brew fork, interactive yes: resets origin, removes profile lines, brew update"
-brew_fork_state
-interactive 'S\ny\nyes\n' HOMEBREW_BREW_GIT_REMOTE="$BREW_FORK" HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
-check "exit 0" test "$RC" -eq 0
-check "plan shows origin reset" has "in $P/Homebrew: set origin to https://github.com/Homebrew/brew (was $BREW_FORK)"
-check "set-url ran" logged "git -C $P/Homebrew remote set-url origin https://github.com/Homebrew/brew"
-check "brew update ran" logged "brew update"
-check "brew update env empty" grep -qx "brewenv BREW_GIT_REMOTE=" "$LOG"
-check "brew origin upstream after update" test "$(brew_origin)" = "https://github.com/Homebrew/brew"
-check "verified" has "Verified: Homebrew/brew origin is https://github.com/Homebrew/brew."
-check ".zprofile line removed" bash -c "! grep -q HOMEBREW_BREW_GIT_REMOTE '$H/.zprofile'"
+check "plan: origin change" has "set origin to $BREW_FORK (was upstream $BREW_UP_URL)"
+check "plan: tag checkout" has "fetch its tags and check out release tag 7.0.11"
+check "no reset-to-upstream offer" no_text "Reset Homebrew/brew"
+check "no fork warning" no_text "come from a fork"
+check "set origin" logged "git -C $P/Homebrew config remote.origin.url $BREW_FORK"
+check "fetched tags with --force" logged "git -C $P/Homebrew fetch --force --tags origin"
+check "checked out like brew update" logged "git -C $P/Homebrew checkout --force -B stable refs/tags/7.0.11"
+check "brew at the fork's 7.0.11 (local upstream tag replaced)" brew_at_fork_tag
+check "verified" has "Verified: Homebrew/brew origin is $BREW_FORK, at release 7.0.11"
+check "brew update ran with the fork" grep -qx "brewenv BREW_GIT_REMOTE=$BREW_FORK" "$LOG"
+check ".zshenv upstream value rewritten" test "$(count 'HOMEBREW_BREW_GIT_REMOTE=' "$H/.zshenv")" = 1
+check ".zshenv brew line canonical" grep -qxF "$LINE_BREW" "$H/.zshenv"
+check ".zprofile other fork rewritten" grep -qxF "$LINE_BREW" "$H/.zprofile"
 check ".zprofile rest kept" grep -qxF 'export EDITOR=vim' "$H/.zprofile"
-check ".zshrc line removed" bash -c "! grep -q HOMEBREW_BREW_GIT_REMOTE '$H/.zshrc'"
-check "backups made" bash -c "ls '$H'/.zprofile.intelbrew-backup-* '$H'/.zshrc.intelbrew-backup-* >/dev/null"
+check "no other fork left" bash -c "! grep -q someone '$H/.zprofile' '$H/.zshenv'"
+check "backups made" bash -c "ls '$H'/.zprofile.intelbrew-backup-* '$H'/.zshenv.intelbrew-backup-* >/dev/null"
 check "core untouched" remote_is "$FORK_URL"
-check "box: this terminal still has it" has "This terminal still has HOMEBREW_BREW_GIT_REMOTE=$BREW_FORK"
-check "box: brew config check" has "brew config | grep BREW_GIT_REMOTE"
+check "box: this terminal has upstream" has "This terminal has a DIFFERENT HOMEBREW_BREW_GIT_REMOTE:"
 before="$(snapshot)"; : >"$LOG"
-interactive 'S\n' HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
-check "re-run from a new shell: exit 0" test "$RC" -eq 0
-check "re-run: no warning" no_text "come from a fork"
+run_install "${CUR_ENV[@]}"
+check "re-run: exit 0" test "$RC" -eq 0
 check "re-run: nothing to change" has "Nothing to change"
+check "re-run: no change" test "$before" = "$(snapshot)"
+check "re-run: no git writes" bash -c "! grep -qE '(config remote|checkout|fetch|tag -d)' '$LOG'"
+check "re-run: no box" no_text "ACTION NEEDED"
+finish
+
+start "item 8: brew on a different, unknown fork: switched (no offer, no reset)"
+make_existing "$FORK_URL" "https://github.com/someone/brew"
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+interactive 'S\nyes\n' "${CUR_ENV[@]}"
+check "exit 0" test "$RC" -eq 0
+check "plan names the other fork" has "set origin to $BREW_FORK (was a different Homebrew/brew fork: https://github.com/someone/brew)"
+check "only the Proceed question" test "$(grep -o 'Type "yes"' "$T/tty.out" | wc -l | tr -d ' ')" = 1
+check "no y/N offer" bash -c "! grep -q 'y/N' '$T/tty.out'"
+check "brew on the fork tag" brew_at_fork_tag
+check "profile untouched" no_backups
+finish
+
+start "item 8: declining the plan changes nothing"
+make_existing "$FORK_URL" upstream
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+before="$(snapshot)"
+interactive 'S\n\n' "${CUR_ENV[@]}"
+check "nonzero" test "$RC" -ne 0
+check "stopped" has "Stopped. Nothing was changed."
+check "nothing changed" test "$before" = "$(snapshot)"
+finish
+
+start "item 8: brew with no origin (bare checkout): gets the fork"
+make_existing "$FORK_URL" bare
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+run_install "${CUR_ENV[@]}"
+check "exit 0" test "$RC" -eq 0
+check "plan: none set" has "set origin to $BREW_FORK (none set)"
+check "brew on the fork tag" brew_at_fork_tag
+finish
+
+start "item 8: fork origin but an old commit (old fork main) and a stale upstream tag"
+make_existing "$FORK_URL"
+"$REAL_GIT" -C "$P/Homebrew" checkout -q --force -B main "$BREW_FORK_MAIN"
+"$REAL_GIT" -C "$P/Homebrew" tag 7.0.12 "$BREW_FORK_MAIN"   # e.g. fetched from upstream earlier
+"$REAL_GIT" -C "$P/Homebrew" tag 6.9.0 "$BREW_FORK_MAIN"    # older ones are left alone
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+run_install "${CUR_ENV[@]}"
+check "exit 0" test "$RC" -eq 0
+check "no origin change planned" no_text "set origin to"
+check "plan: stale tag" has "brew update would otherwise pick): 7.0.12"
+check "stale tag deleted" bash -c "! '$REAL_GIT' -C '$P/Homebrew' rev-parse -q --verify refs/tags/7.0.12"
+check "older tag kept" "$REAL_GIT" -C "$P/Homebrew" rev-parse -q --verify refs/tags/6.9.0
+check "brew on the fork tag" brew_at_fork_tag
+before="$(snapshot)"
+run_install "${CUR_ENV[@]}"
+check "re-run: no change" test "$before" = "$(snapshot)"
+check "re-run: nothing to change" has "Nothing to change"
+finish
+
+start "item 8: uncommitted changes in Homebrew/brew: refuses, changes nothing"
+make_existing "$FORK_URL" upstream
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+echo dirty >>"$P/Homebrew/VERSION"
+before="$(snapshot)"
+run_install "${CUR_ENV[@]}"
+check "nonzero" test "$RC" -ne 0
+check "says uncommitted" has "(Homebrew/brew) has uncommitted changes"
+check "nothing changed" test "$before" = "$(snapshot)"
+finish
+
+start "item 8: brew.env with another brew remote: refuses"
+mkdir -p "$H/.homebrew"; echo "HOMEBREW_BREW_GIT_REMOTE=$BREW_UP_URL" >"$H/.homebrew/brew.env"
+run_install
+check "nonzero" test "$RC" -ne 0
+check "names brew.env" has "brew.env sets HOMEBREW_BREW_GIT_REMOTE=$BREW_UP_URL"
+check "nothing installed" test ! -e "$P/bin/brew"
+finish
+
+start "item 8: brew.env with the fork is fine"
+mkdir -p "$H/.homebrew"; echo "HOMEBREW_BREW_GIT_REMOTE=\"$BREW_FORK.git\"" >"$H/.homebrew/brew.env"
+run_install
+check "exit 0" test "$RC" -eq 0
+check "brew on the fork tag" brew_at_fork_tag
+finish
+
+start "item 8: other-fork spelling in .bashrc, stale value in .bash_profile: rewritten, idempotent"
+printf 'export HOMEBREW_BREW_GIT_REMOTE=%s\nexport HOMEBREW_BREW_GIT_REMOTE=%s\n%s\n' "$BREW_UP_URL" "$BREW_FORK" "$LINE_API" >"$H/.bash_profile"
+printf '  HOMEBREW_BREW_GIT_REMOTE=https://github.com/someone/brew\n' >"$H/.bashrc"
+SH=/bin/bash run_install
+check "exit 0" test "$RC" -eq 0
+check ".bash_profile brew once" test "$(count 'HOMEBREW_BREW_GIT_REMOTE=' "$H/.bash_profile")" = 1
+check ".bash_profile canonical" grep -qxF "$LINE_BREW" "$H/.bash_profile"
+check ".bashrc rewritten in place (indent kept)" grep -qxF "  $LINE_BREW" "$H/.bashrc"
+check ".bashrc brew once" test "$(count 'HOMEBREW_BREW_GIT_REMOTE=' "$H/.bashrc")" = 1
+before="$(snapshot)"
+SH=/bin/bash run_install
 check "re-run: no change" test "$before" = "$(snapshot)"
 finish
 
-start "item 8: fork only in this shell's env: warns, nothing to offer"
+start "item 8: old intelbrew block without the brew line: the line goes inside it"
 make_existing "$FORK_URL"
-"$REAL_GIT" -C "$P/Homebrew" remote add origin https://github.com/Homebrew/brew
-printf '%s\n%s\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zshenv"
-interactive 'S\n' HOMEBREW_BREW_GIT_REMOTE="$BREW_FORK" HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+printf 'export A=1\n# >>> intelbrew >>>\n%s\n%s\n# <<< intelbrew <<<\nexport B=2\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zshenv"
+run_install "${CUR_ENV[@]}"
 check "exit 0" test "$RC" -eq 0
-check "warns" has "this shell's environment: HOMEBREW_BREW_GIT_REMOTE=$BREW_FORK"
-check "no offer" bash -c "! grep -q 'Reset Homebrew/brew' '$T/tty.out'"
+check "still one block" test "$(count '^# >>> intelbrew >>>' "$H/.zshenv")" = 1
+check "brew line inside the block" test "$(sed -n '/^# >>> intelbrew >>>$/,/^# <<< intelbrew <<<$/p' "$H/.zshenv" | grep -cxF "$LINE_BREW")" = 1
+check "after the block untouched" test "$(tail -1 "$H/.zshenv")" = "export B=2"
+before="$(snapshot)"
+run_install "${CUR_ENV[@]}"
+check "re-run: no change" test "$before" = "$(snapshot)"
 finish
 
-start "item 8: upstream brew (any spelling) is not flagged"
+start "item 8: fork more than one release behind upstream: warns"
+for t in 7.0.12 7.0.13; do "$REAL_GIT" -C "$ROOT/brewsrc" tag "$t" 7.0.11 && "$REAL_GIT" -C "$ROOT/brewsrc" push -q "$ROOT/brewup.git" "refs/tags/$t"; done
 make_existing "$FORK_URL"
-"$REAL_GIT" -C "$P/Homebrew" remote add origin https://github.com/homebrew/brew.git
-printf '%s\n%s\nexport HOMEBREW_BREW_GIT_REMOTE=https://github.com/Homebrew/brew\n' "$LINE_API" "$LINE_REMOTE" >"$H/.zshenv"
-run_install HOMEBREW_CORE_GIT_REMOTE="$FORK_URL" HOMEBREW_NO_INSTALL_FROM_API=1
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+run_install "${CUR_ENV[@]}"
 check "exit 0" test "$RC" -eq 0
-check "no warning" no_text "come from a fork"
-check "nothing to change" has "Nothing to change"
+check "lag warning" has "newest release is 7.0.11, 2 releases behind upstream Homebrew 7.0.13"
+check "still nothing to change" has "Nothing to change"
+"$REAL_GIT" -C "$ROOT/brewup.git" tag -d 7.0.13 >/dev/null
+run_install "${CUR_ENV[@]}"
+check "one behind: no warning" no_text "releases behind upstream"
+"$REAL_GIT" -C "$ROOT/brewup.git" tag -d 7.0.12 >/dev/null
+for t in 7.0.12 7.0.13; do "$REAL_GIT" -C "$ROOT/brewsrc" tag -d "$t" >/dev/null; done
 finish
 
-start "item 9: future patched-brew option is only a marked comment"
-check "marker present" grep -q "FUTURE OPTION (owner decision pending, NOT implemented)" "$INSTALL"
-check "no option for it" bash -c "! grep -qiE -- '--(patched|fork)-brew|INTELBREW_BREW_' '$INSTALL'"
+start "item 8: fork unreachable on a fresh Mac: refuses before changing anything"
+mv "$ROOT/brewfork.git" "$ROOT/brewfork.offline"
+run_install
+mv "$ROOT/brewfork.offline" "$ROOT/brewfork.git"
+check "nonzero" test "$RC" -ne 0
+check "says so" has "Could not read release tags from $BREW_FORK"
+check "nothing installed" test ! -e "$P/bin/brew"
+check "no profile" test ! -e "$H/.zshenv"
+finish
+
+start "item 8: brew update leaving brew off the tag (developer mode): warns"
+make_existing "$UPSTREAM_URL"
+run_install STUB_UPDATE_BREW_REF="$BREW_FORK_MAIN"
+check "exit 0" test "$RC" -eq 0
+check "warns" has "not the fork's release tag 7.0.11. If you have HOMEBREW_DEVELOPER set"
+finish
+
+start "item 9: no future-option comment, the fork is the brew remote"
+check "old marker gone" bash -c "! grep -q 'FUTURE OPTION' '$INSTALL'"
+check "fork is BREW_GIT_REMOTE" grep -qF 'BREW_GIT_REMOTE="https://github.com/d4rkwyng/brew"' "$INSTALL"
+check "no reset offer" bash -c "! grep -q 'Reset Homebrew/brew' '$INSTALL'"
 finish
 
 # Platform checks
