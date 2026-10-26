@@ -456,7 +456,11 @@ if (( ${#brew_fork_sources[@]} > 0 )); then
     if offer "Reset Homebrew/brew to upstream ($BREW_GIT_URL)?"; then
       reset_brew=1
     else
-      say "Leaving Homebrew/brew as it is. To reset it later, run this installer again without --yes."
+      if [[ "$ASSUME_YES" == "1" ]]; then
+        say "Leaving Homebrew/brew as it is. To reset it later, run this installer again without --yes."
+      else
+        say "Leaving Homebrew/brew as it is. To reset it later, run this installer again and answer y."
+      fi
     fi
   fi
   if (( brew_env_fork )); then
