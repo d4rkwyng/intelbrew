@@ -2,9 +2,6 @@
 
 Keeping Homebrew usable on Intel Macs.
 
-> **Status: pre-release, not yet usable.** No bottles have been published and the
-> installer is an untested draft. Please don't point a real Mac at this yet.
-
 Homebrew made Intel macOS a Tier 3 platform in September 2026. Upstream no longer builds x86_64
 bottles and plans to remove Intel support in or after September 2027. Intelbrew
 rebuilds x86_64 bottles for the most-installed homebrew-core formulae every week, on
@@ -23,22 +20,64 @@ export HOMEBREW_NO_INSTALL_FROM_API=1
 export HOMEBREW_CORE_GIT_REMOTE=https://github.com/d4rkwyng/intelbrew-core
 ```
 
-**An installer is coming.** `install.sh` in this repo is a **beta, untested** draft: it installs brew to
-`/usr/local`, adds those two lines to your shell profile, and clones core from the fork.
-Until it's tested, there are no supported setup instructions.
+## Install
+
+On an Intel Mac running macOS 14 Sonoma or newer, with the Command Line Tools installed
+(`xcode-select --install`), run in Terminal:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
+```
+
+It prints every change and asks before making them. Then open a new terminal window and
+use `brew` as usual.
+
+- **No Homebrew yet:** it clones Homebrew to `/usr/local/Homebrew` (asking for `sudo` only
+  if `/usr/local` needs new directories), links `/usr/local/bin/brew`, and runs
+  `brew tap homebrew/core`, a full clone of `intelbrew-core` (about 1.3 GB).
+- **Existing `/usr/local` Homebrew:** nothing is reinstalled and no formulae are removed.
+  If you have no local homebrew/core (the default, API mode), it taps it from the fork. If
+  you already have one, it points its `origin` at the fork and checks out the fork's
+  `main`; it refuses if that checkout has uncommitted changes. Formulae you already have
+  stay as they are; new installs and upgrades use Intelbrew bottles where there is one.
+- **Shell profile:** it puts the two `export` lines above in `~/.zprofile` (zsh) or
+  `~/.bash_profile` (bash; `~/.profile` if that's the only one you have). Existing lines
+  for those variables in any zsh/bash startup file are rewritten in place, duplicates
+  removed, and each edited file is backed up next to itself as
+  `<file>.intelbrew-backup-<date>`. Running it again changes nothing.
+- It checks afterwards that homebrew/core's `origin` really is the fork, and fails loudly
+  if not. It refuses if a `brew.env` file overrides `HOMEBREW_CORE_GIT_REMOTE`.
+
+To check, in a new terminal: `brew config` should list both variables, and
+`git -C "$(brew --repository homebrew/core)" remote get-url origin` should print the fork.
+
+To switch by hand instead, add the two lines to your shell profile, open a new terminal,
+then `brew tap homebrew/core` (no core tap yet) or `brew update` (existing core tap;
+`brew update` resets the core remote to `HOMEBREW_CORE_GIT_REMOTE`).
+
+To go back to upstream Homebrew, remove the two lines, open a new terminal, and optionally
+run `brew untap homebrew/core` to delete the core clone.
 
 ## Who it's for
 
 - **Intel (x86_64) Macs only.** Apple Silicon users should use upstream Homebrew; the
-  installer refuses to run there.
-- **macOS 14 Sonoma or newer** to get bottles. Sonoma bottles also serve Sequoia and
-  Tahoe on Intel. Older macOS can still use the formulae, but brew builds them from source.
+  installer refuses to run there, including under Rosetta.
+- **macOS 14 Sonoma or newer.** Sonoma bottles also serve Sequoia and Tahoe on Intel,
+  including Macs running them through OpenCore Legacy Patcher. The installer refuses
+  macOS 13 Ventura and older, where the bottles wouldn't be used.
 - **CPU baseline: Westmere.** Homebrew's Intel bottles for Ventura and later target
   Westmere, so ours do too. **Core 2 and Penryn Macs** (including many OpenCore Legacy
-  Patcher machines) **are not supported**: the bottles won't run on them.
+  Patcher machines) **are not supported**: the bottles won't run on them, and the
+  installer refuses to run without SSE4.2, POPCNT, AES and PCLMULQDQ.
 - The Command Line Tools are required. Homebrew needs them on Intel even to pour bottles.
 
 ## Coverage
+
+**Coverage is partial right now.** Bottles were first published in week 43 of 2026.
+After each sync with upstream, formulae whose version changed need a new Intel build, and
+there is currently a backlog of them being rebuilt. Until a formula's bottle is rebuilt,
+`brew install` builds it from source, which can take a long time for big formulae. That
+fills in over the following days and weeks.
 
 The top 500 formulae by installs, plus their dependencies and build dependencies, come to
 about 880 formulae. Formulae outside that set still update weekly, but build from source.
@@ -64,8 +103,8 @@ source. Dropped formulae are listed in [DROPPED.md](DROPPED.md).
 - The bottles are built unmodified from upstream homebrew-core formulae, except for
   Intel fixes that are recorded in the fork's history. Each bottle keeps its upstream
   project's own licence.
-- For GPL/LGPL software, a corresponding-source offer (upstream source tarballs and patches
-  per release) is **TBD and will be in place before any bottle is published**.
+- For GPL/LGPL software, the corresponding source (upstream source archives, resources,
+  patches and the formula) is published in the same GitHub Release as the bottle.
 
 ## Not affiliated
 
