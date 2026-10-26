@@ -42,6 +42,11 @@
 #   INTELBREW_TTY_IN/_OUT    where answers are read / prompts written, default
 #                            /dev/tty (for testing only)
 set -euo pipefail
+# sysctl/pkgutil live in /usr/sbin, which a minimal PATH (cron, `env -i`, some IDEs)
+# leaves out; without it the CPU check misreads an Ivy Bridge as a Core 2. Appended,
+# so anything earlier on PATH still wins.
+PATH="$PATH:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 # The environment of the shell the installer was started from, before this script
 # changes anything: open terminal windows keep exactly these values.
