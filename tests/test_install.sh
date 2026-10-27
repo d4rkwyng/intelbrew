@@ -185,6 +185,10 @@ finish() {
   fi
 }
 count() { grep -c -E "$1" "$2" 2>/dev/null || true; }
+# all_canonical VAR LINE FILE: every (uncommented) VAR= line in FILE is LINE, indent aside
+all_canonical() {
+  [[ "$(grep -E "^[[:blank:]]*(export[[:blank:]]+)?$1=" "$3" | sed -E 's/^[[:blank:]]*//' | grep -cvxF -- "$2")" == 0 ]]
+}
 has() { grep -q -F -- "$1" <<<"$OUT"; }
 logged() { grep -q -F -- "$1" "$LOG"; }
 remote_is() { [[ "$("$REAL_GIT" -C "$(core_dir)" config --get remote.origin.url)" == "$1" ]]; }
@@ -256,9 +260,10 @@ printf 'alias ll="ls -l"\nexport HOMEBREW_CORE_GIT_REMOTE=https://github.com/Hom
 cp "$H/.zprofile" "$T/zprofile.orig"
 run_install
 check "exit 0" test "$RC" -eq 0
-check "remote line exactly once" test "$(count 'HOMEBREW_CORE_GIT_REMOTE=' "$H/.zprofile")" = 2  # +1 commented line
-check "remote line canonical" test "$(count "^$(printf '%s' "$LINE_REMOTE" | sed 's/[.]/\\./g')\$" "$H/.zprofile")" = 1
-check "api line once" test "$(count 'HOMEBREW_NO_INSTALL_FROM_API=' "$H/.zprofile")" = 1
+# duplicates are rewritten, never deleted (a deleted one could empty an if/else branch)
+check "every remote line is the fork" all_canonical HOMEBREW_CORE_GIT_REMOTE "$LINE_REMOTE" "$H/.zprofile"
+check "remote lines kept (3 + 1 commented)" test "$(count 'HOMEBREW_CORE_GIT_REMOTE=' "$H/.zprofile")" = 4
+check "every api line canonical" all_canonical HOMEBREW_NO_INSTALL_FROM_API "$LINE_API" "$H/.zprofile"
 check "commented line untouched" grep -qxF "# export HOMEBREW_CORE_GIT_REMOTE=commented-out-stays" "$H/.zprofile"
 # shellcheck disable=SC2016  # literal $HOME/$PATH text is intended
 check "other lines kept" grep -qxF 'export PATH="$HOME/bin:$PATH"' "$H/.zprofile"
@@ -339,7 +344,7 @@ printf '%s\n%s\n%s\n' "export HOMEBREW_CORE_GIT_REMOTE=$FORK_URL" "export HOMEBR
 printf '%s\n' "export HOMEBREW_CORE_GIT_REMOTE=https://example.invalid/x.git" >"$H/.bashrc"
 SH=/bin/bash run_install
 check "exit 0" test "$RC" -eq 0
-check ".bash_profile remote once" test "$(count 'HOMEBREW_CORE_GIT_REMOTE=' "$H/.bash_profile")" = 1
+check ".bash_profile remote lines all the fork" all_canonical HOMEBREW_CORE_GIT_REMOTE "$LINE_REMOTE" "$H/.bash_profile"
 check ".bashrc fixed" grep -qxF "$LINE_REMOTE" "$H/.bashrc"
 before="$(snapshot)"
 SH=/bin/bash run_install
@@ -419,7 +424,7 @@ printf 'export HOMEBREW_CORE_GIT_REMOTE=%s.git\nexport PATH="/x:$PATH"\nexport H
 run_install HOMEBREW_CORE_GIT_REMOTE="$STALE"
 check "exit 0" test "$RC" -eq 0
 for f in .zprofile .zshrc .zshenv; do
-  check "$f: exactly one remote line" test "$(count 'HOMEBREW_CORE_GIT_REMOTE=' "$H/$f")" = 1
+  check "$f: every remote line is the fork" all_canonical HOMEBREW_CORE_GIT_REMOTE "$LINE_REMOTE" "$H/$f"
   check "$f: it is the fork" grep -qxF "$LINE_REMOTE" "$H/$f"
   check "$f: backed up" bash -c "ls '$H'/$f.intelbrew-backup-* >/dev/null 2>&1"
 done
@@ -663,10 +668,38 @@ check "nothing installed" test ! -e "$P/bin/brew"
 finish
 
 start "item 8: brew.env with the fork is fine"
-mkdir -p "$H/.homebrew"; echo "HOMEBREW_BREW_GIT_REMOTE=\"$BREW_FORK.git\"" >"$H/.homebrew/brew.env"
+mkdir -p "$H/.homebrew"; echo "  HOMEBREW_BREW_GIT_REMOTE=$BREW_FORK.git" >"$H/.homebrew/brew.env"
 run_install
 check "exit 0" test "$RC" -eq 0
 check "brew on the fork tag" brew_at_fork_tag
+finish
+
+start "brew.env: quoted value refused (bin/brew exports it with the quotes)"
+mkdir -p "$H/.homebrew"; echo "HOMEBREW_CORE_GIT_REMOTE=\"$FORK_URL\"" >"$H/.homebrew/brew.env"
+run_install
+check "nonzero" test "$RC" -ne 0
+check "names brew.env" has "brew.env sets HOMEBREW_CORE_GIT_REMOTE"
+finish
+
+start "brew.env: indented other value refused (bin/brew strips the indent)"
+mkdir -p "$H/.homebrew"; echo "   HOMEBREW_CORE_GIT_REMOTE=$UPSTREAM_URL" >"$H/.homebrew/brew.env"
+run_install
+check "nonzero" test "$RC" -ne 0
+check "names brew.env" has "brew.env sets HOMEBREW_CORE_GIT_REMOTE"
+finish
+
+start "profile: duplicate in if/else kept, multi-assignment line left alone"
+make_existing "$FORK_URL"
+printf 'if false; then\n  export HOMEBREW_CORE_GIT_REMOTE=https://example.invalid/a\nelse\n  export HOMEBREW_CORE_GIT_REMOTE=https://example.invalid/b\nfi\nexport HOMEBREW_NO_INSTALL_FROM_API=1 HOMEBREW_NO_ANALYTICS=1\n' >"$H/.bash_profile"
+SH=/bin/bash run_install
+check "exit 0" test "$RC" -eq 0
+check ".bash_profile still parses" /bin/bash -n "$H/.bash_profile"
+check "else branch rewritten, not emptied" test "$(count "^  $(printf '%s' "$LINE_REMOTE" | sed 's/[.]/\\./g')\$" "$H/.bash_profile")" = 2
+check "multi-assignment kept whole" grep -qxF 'export HOMEBREW_NO_INSTALL_FROM_API=1 HOMEBREW_NO_ANALYTICS=1' "$H/.bash_profile"
+check "login bash sees all three" test "$(env -i HOME="$H" /bin/bash -lc 'printf %s "$HOMEBREW_CORE_GIT_REMOTE|$HOMEBREW_NO_INSTALL_FROM_API|$HOMEBREW_NO_ANALYTICS"' 2>/dev/null)" = "$FORK_URL|1|1"
+before="$(snapshot)"
+SH=/bin/bash run_install
+check "re-run: no change" test "$before" = "$(snapshot)"
 finish
 
 start "item 8: other-fork spelling in .bashrc, stale value in .bash_profile: rewritten, idempotent"
@@ -674,7 +707,7 @@ printf 'export HOMEBREW_BREW_GIT_REMOTE=%s\nexport HOMEBREW_BREW_GIT_REMOTE=%s\n
 printf '  HOMEBREW_BREW_GIT_REMOTE=https://github.com/someone/brew\n' >"$H/.bashrc"
 SH=/bin/bash run_install
 check "exit 0" test "$RC" -eq 0
-check ".bash_profile brew once" test "$(count 'HOMEBREW_BREW_GIT_REMOTE=' "$H/.bash_profile")" = 1
+check ".bash_profile every brew line canonical" all_canonical HOMEBREW_BREW_GIT_REMOTE "$LINE_BREW" "$H/.bash_profile"
 check ".bash_profile canonical" grep -qxF "$LINE_BREW" "$H/.bash_profile"
 check ".bashrc rewritten in place (indent kept)" grep -qxF "  $LINE_BREW" "$H/.bashrc"
 check ".bashrc brew once" test "$(count 'HOMEBREW_BREW_GIT_REMOTE=' "$H/.bashrc")" = 1

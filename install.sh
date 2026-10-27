@@ -22,8 +22,9 @@
 #   export HOMEBREW_NO_INSTALL_FROM_API=1
 #   export HOMEBREW_CORE_GIT_REMOTE="https://github.com/d4rkwyng/intelbrew-core"
 #   export HOMEBREW_BREW_GIT_REMOTE="https://github.com/d4rkwyng/brew"
-# Existing lines for any of them in any zsh/bash startup file are rewritten in
-# place (duplicates removed), never appended twice. Each file is backed up first.
+# Existing lines setting any of them in any zsh/bash startup file are rewritten in
+# place (every copy; no line is deleted), never appended twice. Each file is backed up
+# first.
 # Re-running the script when everything is already set up changes nothing.
 #
 # Brew behaviour this relies on (Homebrew/brew source):
@@ -87,7 +88,7 @@ ASSUME_YES="${INTELBREW_YES:-0}"
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,58p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n '2,59p' "$0" 2>/dev/null || true; exit 0 ;;
     *) printf 'Error: unknown option: %s\n' "$arg" >&2; exit 2 ;;
   esac
 done
@@ -199,18 +200,22 @@ fi
 # brew.env files override the shell environment (bin/brew), so a conflicting value
 # there would silently undo everything below. Refuse rather than edit them.
 is_brew_fork() { [[ "$(lower "$(normalize_url "$1")")" == "$(lower "$BREW_GIT_REMOTE")" ]]; }
+# Same file list and line parsing as bin/brew (export_homebrew_env_file): plain
+# `read -r` (surrounding whitespace stripped) and `export "$line"`, so quotes in a
+# value are kept literally and are NOT stripped here either.
 if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then user_env="$XDG_CONFIG_HOME/homebrew/brew.env"
+elif [[ -n "${HOMEBREW_XDG_CONFIG_HOME:-}" ]]; then user_env="$HOMEBREW_XDG_CONFIG_HOME/homebrew/brew.env"
 else user_env="$HOME/.homebrew/brew.env"; fi
 for envfile in /etc/homebrew/brew.env "$PREFIX/etc/homebrew/brew.env" "$user_env"; do
   [[ -r "$envfile" ]] || continue
-  while IFS= read -r line; do
+  while read -r line; do
     case "$line" in
       HOMEBREW_CORE_GIT_REMOTE=*)
-        v="${line#HOMEBREW_CORE_GIT_REMOTE=}"; v="${v%\"}"; v="${v#\"}"
+        v="${line#HOMEBREW_CORE_GIT_REMOTE=}"
         [[ "$(normalize_url "$v")" == "$CORE_GIT_REMOTE" ]] \
           || die "$envfile sets HOMEBREW_CORE_GIT_REMOTE=$v, which overrides your shell profile. Remove that line or set it to $CORE_GIT_REMOTE, then run this again." ;;
       HOMEBREW_BREW_GIT_REMOTE=*)
-        v="${line#HOMEBREW_BREW_GIT_REMOTE=}"; v="${v%\"}"; v="${v#\"}"
+        v="${line#HOMEBREW_BREW_GIT_REMOTE=}"
         is_brew_fork "$v" \
           || die "$envfile sets HOMEBREW_BREW_GIT_REMOTE=$v, which overrides your shell profile. Remove that line or set it to $BREW_GIT_REMOTE, then run this again." ;;
     esac
@@ -240,28 +245,37 @@ esac
 scan_files=("$zdot/.zshenv" "$zdot/.zprofile" "$zdot/.zshrc" "$zdot/.zlogin"
             "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc")
 
-# Writes to $2 the new content of profile $1: every HOMEBREW_CORE_GIT_REMOTE= /
-# HOMEBREW_NO_INSTALL_FROM_API= / HOMEBREW_BREW_GIT_REMOTE= assignment is rewritten to
-# the Intelbrew value and later duplicates are dropped. If $3 = append, missing lines
-# go inside an existing intelbrew block, or else into a new block at the end.
+# Writes to $2 the new content of profile $1: every line that is a single
+# HOMEBREW_CORE_GIT_REMOTE= / HOMEBREW_NO_INSTALL_FROM_API= / HOMEBREW_BREW_GIT_REMOTE=
+# assignment (optionally exported, optionally with a trailing comment) is rewritten to
+# the Intelbrew value. No line is ever dropped: a duplicate may be the only command in
+# an if/else branch, and deleting it would leave an empty branch, a bash syntax error.
+# Lines that set one of them among other things (`export A=1 B=2`, `VAR=x cmd`) are left
+# alone. If $3 = append, missing lines go inside an existing intelbrew block, or else
+# into a new block at the end.
 # (Two passes over the file: the first only notes which settings it has.)
 rewrite_profile() {
   local src="$1" out="$2" mode="$3"
   if [[ -e "$src" ]]; then
     awk -v lr="$LINE_REMOTE" -v la="$LINE_API" -v lb="$LINE_BREW" -v mode="$mode" \
         -v mb="$MARK_BEGIN" -v me="$MARK_END" '
-      BEGIN { order = "a r b"; split(order, keys, " "); line["a"] = la; line["r"] = lr; line["b"] = lb }
+      BEGIN {
+        order = "a r b"; split(order, keys, " "); line["a"] = la; line["r"] = lr; line["b"] = lb
+        # one word: "...", \047...\047 (single quotes) or unquoted; then an optional
+        # ";" and comment, and nothing else
+        rest = "=(\"[^\"]*\"|\047[^\047]*\047|[^ \t;&|#\"\047`]*);?[ \t]*(#.*)?$"
+      }
       function indent(s) { match(s, /^[ \t]*/); return substr(s, 1, RLENGTH) }
       function kind(s) {
-        if (s ~ /^[ \t]*(export[ \t]+)?HOMEBREW_CORE_GIT_REMOTE=/) return "r"
-        if (s ~ /^[ \t]*(export[ \t]+)?HOMEBREW_NO_INSTALL_FROM_API=/) return "a"
-        if (s ~ /^[ \t]*(export[ \t]+)?HOMEBREW_BREW_GIT_REMOTE=/) return "b"
+        if (s ~ ("^[ \t]*(export[ \t]+)?HOMEBREW_CORE_GIT_REMOTE" rest)) return "r"
+        if (s ~ ("^[ \t]*(export[ \t]+)?HOMEBREW_NO_INSTALL_FROM_API" rest)) return "a"
+        if (s ~ ("^[ \t]*(export[ \t]+)?HOMEBREW_BREW_GIT_REMOTE" rest)) return "b"
         return ""
       }
       NR == FNR { k = kind($0); if (k != "") has[k] = 1; next }
       {
         k = kind($0)
-        if (k != "") { if (!seen[k]++) print indent($0) line[k]; next }
+        if (k != "") { print indent($0) line[k]; next }
         if (mode == "append" && $0 == me && !filled) {
           filled = 1
           for (i = 1; i <= 3; i++) if (!has[keys[i]]) { print line[keys[i]]; has[keys[i]] = 1 }
@@ -354,6 +368,7 @@ is_core_origin() {  # does repo $1 fetch from the fork?
 }
 
 mode=""
+nothing_changed="Nothing was changed."   # until the [U] uninstall below has run
 if [[ -e "$BREW" || -e "$REPOSITORY" ]]; then
   [[ -x "$BREW" && -d "$REPOSITORY/.git" ]] \
     || die "Found a partial Homebrew ($BREW or $REPOSITORY missing or not a git checkout). Fix or remove it yourself, then run this again."
@@ -398,6 +413,7 @@ EOF
           warn "$REPOSITORY is still there after uninstalling; moving it aside."
           run sudo mv "$REPOSITORY" "$REPOSITORY.intelbrew-old-$STAMP"
         fi
+        nothing_changed="The old Homebrew at $PREFIX WAS uninstalled; nothing else was changed."
         mode=fresh
         ;;
       *) die "Quit. Nothing was changed." ;;
@@ -502,7 +518,7 @@ if [[ "$mode" == "existing" ]]; then
   fi
 else
   [[ -n "$fork_tag" ]] \
-    || die "Could not read release tags from $BREW_GIT_REMOTE ($(head -1 "$tmpdir/fork-lsr.err" 2>/dev/null)). Check your network, then run this again. Nothing was changed."
+    || die "Could not read release tags from $BREW_GIT_REMOTE ($(head -1 "$tmpdir/fork-lsr.err" 2>/dev/null)). Check your network, then run this again. $nothing_changed"
   brew_action=clone
 fi
 
@@ -707,7 +723,7 @@ else
   (( ${#profile_changes[@]} == 0 )) || show_profile_plan
 fi
 (( need_update == 0 )) || printf '  brew update\n'
-confirm "Proceed?" || die "Stopped. Nothing was changed."
+confirm "Proceed?" || die "Stopped. $nothing_changed"
 
 # ---- 5. do it ----------------------------------------------------------------------
 if [[ "$mode" == "fresh" ]]; then

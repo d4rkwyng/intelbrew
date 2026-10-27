@@ -41,8 +41,9 @@ It prints every change and asks before making them. Then open a new terminal win
 use `brew` as usual.
 
 - **No Homebrew yet:** it clones Homebrew from `d4rkwyng/brew` to `/usr/local/Homebrew`
-  and checks out its newest release tag (asking for `sudo` only if `/usr/local` needs new
-  directories), links `/usr/local/bin/brew`, and runs
+  and checks out its newest release tag (asking for `sudo` only to create directories in
+  `/usr/local` or take ownership of ones you can't write to), links `/usr/local/bin/brew`,
+  and runs
   `brew tap homebrew/core`, a full clone of `intelbrew-core` (about 1.3 GB).
 - **Existing `/usr/local` Homebrew:** nothing is reinstalled and no formulae are removed.
   If you have no local homebrew/core (the default, API mode), it taps it from the fork. If
@@ -58,12 +59,12 @@ use `brew` as usual.
   fork's newest tag is more than one release behind upstream's.
 - **Shell profile:** it puts the three `export` lines above in `~/.zshenv` (zsh; read by
   every zsh, including non-login ones in tmux and IDE terminals) or in both
-  `~/.bash_profile` and `~/.bashrc` (bash; `~/.profile` instead of `~/.bash_profile` if
-  that's the only one you have), then checks that a new login and non-login shell both
-  see them. Windows already open keep the old settings until reopened. Existing lines
-  for those variables in any zsh/bash startup file are rewritten in place, duplicates
-  removed, and each edited file is backed up next to itself as
-  `<file>.intelbrew-backup-<date>`. Running it again changes nothing.
+  `~/.bash_profile` and `~/.bashrc` (bash; if you have no `~/.bash_profile` it uses
+  `~/.bash_login` or `~/.profile`, whichever bash reads), then checks that a new login and
+  non-login shell both see them. Windows already open keep the old settings until
+  reopened. Existing lines that set those variables in any zsh/bash startup file are
+  rewritten in place (every copy; no line is deleted), and each edited file is backed up
+  next to itself as `<file>.intelbrew-backup-<date>`. Running it again changes nothing.
 - It checks afterwards that homebrew/core's `origin` really is the core fork and that
   Homebrew/brew's `origin` is `d4rkwyng/brew` at its newest release tag, and fails loudly
   if not. It refuses if a `brew.env` file sets `HOMEBREW_CORE_GIT_REMOTE` or
