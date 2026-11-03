@@ -50,6 +50,10 @@ use `brew` as usual.
   you already have one, it points its `origin` at the fork and checks out the fork's
   `main`; it refuses if that checkout has uncommitted changes. Formulae you already have
   stay as they are; new installs and upgrades use Intelbrew bottles where there is one.
+  That is the default answer to its first question: it can instead uninstall the existing
+  Homebrew with Homebrew's official uninstaller and then install fresh (this removes every
+  installed formula and cask, and needs you to type `yes`), or quit. With `--yes` (or
+  `INTELBREW_YES=1`) it always switches in place.
 - **Homebrew/brew:** `d4rkwyng/brew` is the expected remote. If `$(brew --repository)`
   has upstream `Homebrew/brew`, another fork, or no origin, the plan includes pointing its
   `origin` at `d4rkwyng/brew`, fetching its tags and checking out its newest release tag

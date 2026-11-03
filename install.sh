@@ -402,11 +402,13 @@ EOF
       [Uu]*)
         confirm "Uninstall the Homebrew at $PREFIX and every package it installed?" \
           || die "Not confirmed. Nothing was changed."
-        uninstaller="$(mktemp -t brew-uninstall)"
-        run curl -fsSL -o "$uninstaller" https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh
-        # Interactive: Homebrew's uninstaller asks for its own confirmation.
-        /bin/bash "$uninstaller" --path "$PREFIX" <&3 || die "Homebrew's uninstaller failed. Fix that, then run this again."
-        rm -f "$uninstaller"
+        uninstaller="$tmpdir/uninstall.sh"   # removed by the EXIT trap on every path
+        run curl -fsSL -o "$uninstaller" https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh \
+          || die "Could not download Homebrew's uninstaller. Check your network, then run this again. Nothing was changed."
+        # Interactive: Homebrew's uninstaller asks for its own confirmation, and exits 1
+        # (abort) if that is declined, so a non-zero exit is not necessarily a failure.
+        /bin/bash "$uninstaller" --path "$PREFIX" <&3 \
+          || die "Homebrew's uninstaller stopped (declined at its prompt, or it failed; see its output above). Run this again when you are ready."
         hash -r
         [[ ! -e "$BREW" ]] || die "$BREW is still there after uninstalling. Remove it, then run this again."
         if [[ -e "$REPOSITORY" ]]; then

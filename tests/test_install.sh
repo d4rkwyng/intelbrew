@@ -72,6 +72,25 @@ cat >"$STUBS/sudo" <<'S'
 #!/bin/bash
 echo "sudo $*" >>"$STUB_LOG"; echo "sudo must not be called in tests" >&2; exit 1
 S
+# curl is only used to fetch Homebrew's uninstaller ([U]); never touch the network.
+# STUB_CURL=fail: download fails; otherwise writes a fake uninstaller that, like the
+# real one, reads its own y/N answer from stdin, exits 1 on "no", and with --path P
+# removes P/bin/brew and P/Homebrew.
+cat >"$STUBS/curl" <<'S'
+#!/bin/bash
+echo "curl $*" >>"$STUB_LOG"
+[[ "${STUB_CURL:-ok}" != fail ]] || { echo "curl: (6) stub: could not resolve host" >&2; exit 6; }
+out=""
+while [[ $# -gt 0 ]]; do [[ "$1" == -o ]] && { out="$2"; shift; }; shift; done
+[[ -n "$out" ]] || { echo "curl stub: no -o" >&2; exit 2; }
+cat >"$out" <<'U'
+echo "uninstaller $*" >>"$STUB_LOG"
+[[ "$1" == --path && -n "$2" ]] || exit 2
+read -r reply || true
+[[ "$reply" == [yY]* ]] || { echo "Aborting." >&2; exit 1; }
+rm -rf "$2/bin/brew" "$2/Homebrew"
+U
+S
 cat >"$STUBS/git" <<S
 #!/bin/bash
 echo "git \$*" >>"\$STUB_LOG"
@@ -767,6 +786,73 @@ check "fork is BREW_GIT_REMOTE" grep -qF 'BREW_GIT_REMOTE="https://github.com/d4
 check "no reset offer" bash -c "! grep -q 'Reset Homebrew/brew' '$INSTALL'"
 finish
 
+# ---- existing Homebrew: the [S]witch / [U]ninstall / [Q]uit prompt ------------------
+no_tmp_left() { [[ -z "$(find "$T" -maxdepth 1 -name 'intelbrew.*' -print -quit)" ]]; }  # the installer's $tmpdir
+
+start "prompt: empty answer means [S]witch"
+make_existing "$FORK_URL" upstream
+interactive '\nyes\n'
+check "exit 0" test "$RC" -eq 0
+check "prompt shown" grep -qF '[S] Switch it to Intelbrew in place (default).' "$T/tty.out"
+check "switched, not uninstalled" brew_at_fork_tag
+check "no uninstaller download" bash -c "! grep -q '^curl' '$LOG'"
+finish
+
+start "prompt: [Q] quits and changes nothing"
+make_existing "$FORK_URL" upstream
+before="$(snapshot)"
+interactive 'q\n'
+check "nonzero" test "$RC" -ne 0
+check "says quit" has "Quit. Nothing was changed."
+check "nothing changed" test "$before" = "$(snapshot)"
+check "no uninstaller download" bash -c "! grep -q '^curl' '$LOG'"
+finish
+
+start "prompt: [U] without typing yes changes nothing"
+make_existing "$FORK_URL" upstream
+before="$(snapshot)"
+interactive 'U\ny\n'
+check "nonzero" test "$RC" -ne 0
+check "says not confirmed" has "Not confirmed. Nothing was changed."
+check "nothing changed" test "$before" = "$(snapshot)"
+check "no uninstaller download" bash -c "! grep -q '^curl' '$LOG'"
+finish
+
+start "prompt: [U] when the uninstaller can't be downloaded: refuses, changes nothing"
+make_existing "$FORK_URL" upstream
+before="$(snapshot)"
+interactive 'U\nyes\n' STUB_CURL=fail
+check "nonzero" test "$RC" -ne 0
+check "says so" has "Could not download Homebrew's uninstaller"
+check "uninstaller not run" bash -c "! grep -q '^uninstaller' '$LOG'"
+check "nothing changed" test "$before" = "$(snapshot)"
+check "no temp files left" no_tmp_left
+finish
+
+start "prompt: [U] declined at the uninstaller's own prompt: stops, changes nothing"
+make_existing "$FORK_URL" upstream
+before="$(snapshot)"
+interactive 'U\nyes\nn\n'
+check "nonzero" test "$RC" -ne 0
+check "uninstaller ran with the prefix" logged "uninstaller --path $P"
+check "says it stopped" has "Homebrew's uninstaller stopped (declined at its prompt"
+check "nothing changed" test "$before" = "$(snapshot)"
+check "no temp files left" no_tmp_left
+finish
+
+start "prompt: [U] then a fresh install from the fork"
+make_existing "$UPSTREAM_URL" upstream
+interactive 'U\nyes\ny\nyes\n'
+check "exit 0" test "$RC" -eq 0
+check "uninstaller ran with the prefix" logged "uninstaller --path $P"
+check "then planned as fresh" has "Homebrew: fresh install at $P."
+check "brew cloned from the fork" logged "git clone $BREW_FORK $P/Homebrew"
+check "brew at the fork's release tag" brew_at_fork_tag
+check "core tapped from the fork" remote_is "$FORK_URL"
+check "no sudo" bash -c "! grep -q '^sudo' '$LOG'"
+check "no temp files left" no_tmp_left
+finish
+
 # Platform checks
 platform_case() {  # platform_case "<name>" accept|refuse "<expected text or ->" env...
   local name="$1" want="$2" text="$3"; shift 3
@@ -778,7 +864,7 @@ platform_case() {  # platform_case "<name>" accept|refuse "<expected text or ->"
   else
     check "refused" test "$RC" -ne 0
     check "nothing installed" test ! -e "$P/bin/brew"
-    check "no profile" test ! -e "$H/.zprofile"
+    check "no profile (HOME untouched)" test -z "$(find "$H" -mindepth 1 -print -quit)"
   fi
   [[ "$text" == - ]] || check "says: $text" has "$text"
   finish
