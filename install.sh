@@ -445,6 +445,13 @@ if [[ "$mode" == "existing" ]]; then
         || die "$core has uncommitted changes. Commit, stash or discard them, then run this again. Nothing was changed."
       core_action=switch
     fi
+    # cmd/update.sh refuses (odie) to update a shallow homebrew-core, so switching one
+    # would end in a failed `brew update` after the profile was already rewritten.
+    # Same test as brew's shallow_repository(). Unshallowing is a large download that
+    # brew deliberately leaves to the user, so this does too.
+    if [[ "$(git -C "$core" rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
+      die "$core is a shallow clone, and brew update refuses to update a shallow homebrew-core. First run: git -C \"$core\" fetch --unshallow (a large one-time download), then run this again. Nothing was changed."
+    fi
   fi
 else
   core="$REPOSITORY/Library/Taps/homebrew/homebrew-core"

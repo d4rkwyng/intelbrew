@@ -335,6 +335,20 @@ check "says uncommitted" has "uncommitted changes"
 check "nothing changed" test "$before" = "$(snapshot)"
 finish
 
+start "existing shallow core tap: refuses before changing anything"
+make_existing none
+"$REAL_GIT" clone -q --depth 1 "file://$ROOT/upstream.git" "$(core_dir)"
+"$REAL_GIT" -C "$(core_dir)" remote set-url origin "$UPSTREAM_URL"
+before="$(snapshot)"
+run_install
+check "nonzero" test "$RC" -ne 0
+check "says shallow" has "is a shallow clone"
+check "gives the unshallow command" has "fetch --unshallow"
+check "nothing changed" test "$before" = "$(snapshot)"
+check "no profile written" test ! -e "$H/.zshenv"
+check "no brew update" bash -c "! grep -q 'brew update' '$LOG'"
+finish
+
 start "bash with no profile: creates .bash_profile"
 SH=/bin/bash run_install
 check "exit 0" test "$RC" -eq 0

@@ -72,7 +72,9 @@ use `brew` as usual.
 - It checks afterwards that homebrew/core's `origin` really is the core fork and that
   Homebrew/brew's `origin` is `d4rkwyng/brew` at its newest release tag, and fails loudly
   if not. It refuses if a `brew.env` file sets `HOMEBREW_CORE_GIT_REMOTE` or
-  `HOMEBREW_BREW_GIT_REMOTE` to anything else.
+  `HOMEBREW_BREW_GIT_REMOTE` to anything else, and if an existing homebrew/core tap is a
+  shallow clone (`brew update` refuses those; it prints the `git fetch --unshallow` to run
+  first).
 - Before the first core clone it tells you it's a one-time download of about 1.3 GB
   (roughly 5-15 minutes). It ends with a boxed **ACTION NEEDED** note: windows that were
   already open, including the one you ran it from, must be restarted
