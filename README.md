@@ -62,7 +62,8 @@ use `brew` as usual.
   deleted. It refuses if tracked files there have uncommitted changes, and it warns if the
   fork's newest tag is more than one release behind upstream's.
 - **Shell profile:** it puts the three `export` lines above in `~/.zshenv` (zsh; read by
-  every zsh, including non-login ones in tmux and IDE terminals) or in both
+  every zsh, including non-login ones in tmux and IDE terminals; if you use `ZDOTDIR`, in
+  `$ZDOTDIR/.zshenv` as well) or in both
   `~/.bash_profile` and `~/.bashrc` (bash; if you have no `~/.bash_profile` it uses
   `~/.bash_login` or `~/.profile`, whichever bash reads), then checks that a new login and
   non-login shell both see them. Windows already open keep the old settings until

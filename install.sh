@@ -229,7 +229,12 @@ zdot="${ZDOTDIR:-$HOME}"
 # and brew then silently falls back to the upstream API feed and source builds.
 targets=()
 case "${SHELL:-}" in
-  */zsh)  targets=("$zdot/.zshenv") ;;   # read by every zsh: login, interactive or not
+  */zsh)
+    targets=("$zdot/.zshenv")   # read by every zsh: login, interactive or not
+    # A new terminal reads ~/.zshenv BEFORE any ZDOTDIR set there takes effect, and then
+    # never reads $ZDOTDIR/.zshenv. ZDOTDIR in this shell's environment may come from
+    # ~/.zshenv (the usual way) or from launchd; write both so either case is covered.
+    [[ "${zdot%/}" == "${HOME%/}" ]] || targets+=("$HOME/.zshenv") ;;
   */bash)
     # bash login shells read the first of .bash_profile, .bash_login, .profile;
     # interactive non-login shells read only .bashrc. Write both.
@@ -242,8 +247,9 @@ case "${SHELL:-}" in
     targets+=("$HOME/.bashrc") ;;
 esac
 # Every zsh/bash startup file in which an existing line gets rewritten.
-scan_files=("$zdot/.zshenv" "$zdot/.zprofile" "$zdot/.zshrc" "$zdot/.zlogin"
-            "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc")
+scan_files=("$zdot/.zshenv" "$zdot/.zprofile" "$zdot/.zshrc" "$zdot/.zlogin")
+[[ "${zdot%/}" == "${HOME%/}" ]] || scan_files+=("$HOME/.zshenv")
+scan_files+=("$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc")
 
 # Writes to $2 the new content of profile $1: every line that is a single
 # HOMEBREW_CORE_GIT_REMOTE= / HOMEBREW_NO_INSTALL_FROM_API= / HOMEBREW_BREW_GIT_REMOTE=
@@ -369,6 +375,11 @@ is_core_origin() {  # does repo $1 fetch from the fork?
 
 mode=""
 nothing_changed="Nothing was changed."   # until the [U] uninstall below has run
+# A symlink left pointing nowhere (Homebrew/ removed by hand) isn't -e, so without this
+# it would only surface as `ln -s` failing after the sudo mkdir and the clone.
+if [[ -L "$BREW" && ! -e "$BREW" ]]; then
+  die "$BREW is a broken symlink (to $(readlink "$BREW")), left from an earlier Homebrew. Remove it (rm \"$BREW\"), then run this again. Nothing was changed."
+fi
 if [[ -e "$BREW" || -e "$REPOSITORY" ]]; then
   [[ -x "$BREW" && -d "$REPOSITORY/.git" ]] \
     || die "Found a partial Homebrew ($BREW or $REPOSITORY missing or not a git checkout). Fix or remove it yourself, then run this again."
@@ -410,7 +421,7 @@ EOF
         /bin/bash "$uninstaller" --path "$PREFIX" <&3 \
           || die "Homebrew's uninstaller stopped (declined at its prompt, or it failed; see its output above). Run this again when you are ready."
         hash -r
-        [[ ! -e "$BREW" ]] || die "$BREW is still there after uninstalling. Remove it, then run this again."
+        [[ ! -e "$BREW" && ! -L "$BREW" ]] || die "$BREW is still there after uninstalling. Remove it, then run this again."
         if [[ -e "$REPOSITORY" ]]; then
           warn "$REPOSITORY is still there after uninstalling; moving it aside."
           run sudo mv "$REPOSITORY" "$REPOSITORY.intelbrew-old-$STAMP"
@@ -827,9 +838,9 @@ fi
 # upstream API feed instead of Intelbrew. Check in fresh child shells.
 # shellcheck disable=SC2016  # the $VARs are expanded by the child shell
 probe='printf "%s|%s|%s" "$HOMEBREW_CORE_GIT_REMOTE" "$HOMEBREW_NO_INSTALL_FROM_API" "$HOMEBREW_BREW_GIT_REMOTE"'
-shell_sees() {  # shell_sees login|nonlogin: prints "<core>|<api>|<brew>" as that shell sees them
+shell_sees() {  # shell_sees login|nonlogin [zdotdir]: prints "<core>|<api>|<brew>" as that shell sees them
   local zd=()
-  [[ -n "${ZDOTDIR:-}" ]] && zd=("ZDOTDIR=$ZDOTDIR")
+  [[ -n "${2:-}" ]] && zd=("ZDOTDIR=$2")
   case "${SHELL:-}:$1" in
     */zsh:nonlogin)  env -i HOME="$HOME" ${zd[@]+"${zd[@]}"} zsh -c "$probe" 2>/dev/null ;;
     */zsh:login)     env -i HOME="$HOME" ${zd[@]+"${zd[@]}"} zsh -lc "$probe" 2>/dev/null ;;
@@ -838,16 +849,22 @@ shell_sees() {  # shell_sees login|nonlogin: prints "<core>|<api>|<brew>" as tha
   esac
 }
 if (( ${#targets[@]} > 0 )); then
-  for how in login nonlogin; do
-    seen="$(shell_sees "$how" || true)"
-    seen_core="${seen%%|*}"; seen_rest="${seen#*|}"
-    seen_api="${seen_rest%%|*}"; seen_brew="${seen_rest#*|}"
-    if [[ "$(normalize_url "$seen_core")" != "$CORE_GIT_REMOTE" || "$seen_api" != "1" ]] ||
-       ! is_brew_fork "$seen_brew"; then
-      warn "A new $how ${SHELL##*/} shell does not see all three settings (got '${seen:-nothing}'). Something later in your startup files may override them; check with: grep -n HOMEBREW_ ~/.z* ~/.bash* ~/.profile"
-    else
-      say "Checked: a new $how ${SHELL##*/} shell sees all three settings."
-    fi
+  # Probe as a new terminal starts: without this shell's ZDOTDIR (it is usually set by
+  # ~/.zshenv itself); and, if ZDOTDIR is set, also with it (as when launchd sets it).
+  probe_zd=("")
+  [[ "${SHELL:-}" != */zsh || -z "${ZDOTDIR:-}" ]] || probe_zd+=("$ZDOTDIR")
+  for zd in "${probe_zd[@]}"; do
+    for how in login nonlogin; do
+      seen="$(shell_sees "$how" "$zd" || true)"
+      seen_core="${seen%%|*}"; seen_rest="${seen#*|}"
+      seen_api="${seen_rest%%|*}"; seen_brew="${seen_rest#*|}"
+      if [[ "$(normalize_url "$seen_core")" != "$CORE_GIT_REMOTE" || "$seen_api" != "1" ]] ||
+         ! is_brew_fork "$seen_brew"; then
+        warn "A new $how ${SHELL##*/} shell${zd:+ with ZDOTDIR=$zd} does not see all three settings (got '${seen:-nothing}'). Something later in your startup files may override them; check with: grep -n HOMEBREW_ ~/.z* ~/.bash* ~/.profile"
+      else
+        say "Checked: a new $how ${SHELL##*/} shell${zd:+ with ZDOTDIR=$zd} sees all three settings."
+      fi
+    done
   done
 fi
 

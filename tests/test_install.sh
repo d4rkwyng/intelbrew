@@ -389,7 +389,23 @@ mkdir -p "$H/zdot"
 run_install ZDOTDIR="$H/zdot"
 check "exit 0" test "$RC" -eq 0
 check "zdot/.zshenv written" grep -qxF "$LINE_REMOTE" "$H/zdot/.zshenv"
-check "no ~/.zshenv" test ! -e "$H/.zshenv"
+check "HOME/.zshenv written too (read first, before ZDOTDIR applies)" grep -qxF "$LINE_REMOTE" "$H/.zshenv"
+finish
+
+# The common way to set ZDOTDIR: in ~/.zshenv. A new terminal starts without it, reads
+# ~/.zshenv, and then $ZDOTDIR/.zprofile and .zshrc -- never $ZDOTDIR/.zshenv.
+start "ZDOTDIR set in ~/.zshenv: a new terminal sees the settings"
+mkdir -p "$H/zdot"
+printf '%s\n' 'export ZDOTDIR="$HOME/zdot"' >"$H/.zshenv"
+run_install ZDOTDIR="$H/zdot"
+check "exit 0" test "$RC" -eq 0
+check "HOME/.zshenv has the settings" grep -qxF "$LINE_REMOTE" "$H/.zshenv"
+check "HOME/.zshenv still sets ZDOTDIR" grep -qF 'export ZDOTDIR=' "$H/.zshenv"
+check "fresh zsh (no ZDOTDIR preset) sees the remote" test "$(env -i HOME="$H" zsh -c 'printf %s "$HOMEBREW_CORE_GIT_REMOTE"')" = "$FORK_URL"
+check "no false 'does not see' warning" bash -c '! grep -q "does not see all three" <<<"$1"' _ "$OUT"
+before="$(snapshot)"
+run_install ZDOTDIR="$H/zdot"
+check "re-run: no change" test "$before" = "$(snapshot)"
 finish
 
 start "unknown shell: warns, edits no profile"
@@ -894,6 +910,17 @@ platform_case "Rosetta refused"                  refuse "Apple Silicon" STUB_TRA
 platform_case "Penryn CPU refused"               refuse "lacks: SSE4.2 POPCNT AES PCLMULQDQ" "STUB_FEATURES=FPU SSE3 SSSE3 SSE4.1"
 platform_case "no CLT refused"                   refuse "Command Line Tools are not installed" STUB_CLT=no STUB_PKGUTIL=no
 platform_case "CLT via pkgutil fallback accepted" accept - STUB_CLT=no STUB_PKGUTIL=yes
+
+# A brew symlink left pointing nowhere (Homebrew/ deleted by hand) must be caught before
+# anything changes, not by `ln -s` failing after the sudo mkdir and the clone.
+start "dangling bin/brew symlink: refuses before changing anything"
+mkdir -p "$P/bin"; ln -s ../Homebrew/bin/brew "$P/bin/brew"
+run_install
+check "nonzero" test "$RC" -ne 0
+check "names the broken symlink" has "broken symlink"
+check "no clone" test ! -e "$P/Homebrew"
+check "no profile (HOME untouched)" test -z "$(find "$H" -mindepth 1 -print -quit)"
+finish
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 )) || { printf 'failed: %s\n' "${failed_names[*]}"; exit 1; }
