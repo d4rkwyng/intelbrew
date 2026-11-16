@@ -108,6 +108,9 @@ case "\$*" in
   "tap homebrew/core")
     "$REAL_GIT" clone -q "\${HOMEBREW_CORE_GIT_REMOTE}" "\$core" || exit 1
     [[ -z "\${STUB_TAP_ORIGIN:-}" ]] || "$REAL_GIT" -C "\$core" remote set-url origin "\$STUB_TAP_ORIGIN" ;;
+  "tap homebrew/cask")
+    [[ "\${STUB_CASK_TAP:-ok}" != fail ]] || { echo "Error: stub: could not clone homebrew/cask" >&2; exit 1; }
+    "$REAL_GIT" init -q "\$(dirname "\$core")/homebrew-cask" ;;
   update)
     echo "brewenv BREW_GIT_REMOTE=\${HOMEBREW_BREW_GIT_REMOTE:-}" >>"\$STUB_LOG"
     # cmd/update.sh: a non-default HOMEBREW_BREW_GIT_REMOTE becomes brew's origin.
@@ -151,12 +154,13 @@ new_case() {   # fresh HOME + prefix for one test case; sets T, H, P, LOG
   T="$(mktemp -d "$ROOT/case.XXXXXX")"
   H="$T/home"; P="$T/prefix"; LOG="$T/calls.log"
   mkdir -p "$H" "$P"; : >"$LOG"
+  INSTALL_ARGS=()
 }
 run_install() {  # run_install [extra env...]; output in $OUT, status in $RC
   OUT="$(env -i PATH="$STUBS:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$H" SHELL="${SH:-/bin/zsh}" \
     TMPDIR="$T" INTELBREW_PREFIX="$P" INTELBREW_YES=1 STUB_LOG="$LOG" USER="$(id -un)" \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" "$@" \
-    /bin/bash "$INSTALL" </dev/null 2>&1)"
+    /bin/bash "$INSTALL" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"} </dev/null 2>&1)"
   RC=$?
 }
 make_existing() {  # existing /usr/local-style install; $1 = core origin or "none"
@@ -650,11 +654,12 @@ finish
 start "item 8: brew on a different, unknown fork: switched (no offer, no reset)"
 make_existing "$FORK_URL" "https://github.com/someone/brew"
 printf '%s\n' "$ALL3" >"$H/.zshenv"
-interactive 'S\nyes\n' "${CUR_ENV[@]}"
+interactive 'S\n\nyes\n' "${CUR_ENV[@]}"   # S, casks: No, Proceed: yes
 check "exit 0" test "$RC" -eq 0
 check "plan names the other fork" has "set origin to $BREW_FORK (was a different Homebrew/brew fork: https://github.com/someone/brew)"
 check "only the Proceed question" test "$(grep -o 'Type "yes"' "$T/tty.out" | wc -l | tr -d ' ')" = 1
-check "no y/N offer" bash -c "! grep -q 'y/N' '$T/tty.out'"
+check "the only y/N offer is the casks one" test "$(grep -o 'y/N' "$T/tty.out" | wc -l | tr -d ' ')" = 1
+check "and it is about casks" grep -qF 'Also enable casks' "$T/tty.out"
 check "brew on the fork tag" brew_at_fork_tag
 check "profile untouched" no_backups
 finish
@@ -663,7 +668,7 @@ start "item 8: declining the plan changes nothing"
 make_existing "$FORK_URL" upstream
 printf '%s\n' "$ALL3" >"$H/.zshenv"
 before="$(snapshot)"
-interactive 'S\n\n' "${CUR_ENV[@]}"
+interactive 'S\n\n\n' "${CUR_ENV[@]}"   # S, casks: No, Proceed: (empty)
 check "nonzero" test "$RC" -ne 0
 check "stopped" has "Stopped. Nothing was changed."
 check "nothing changed" test "$before" = "$(snapshot)"
@@ -821,7 +826,7 @@ no_tmp_left() { [[ -z "$(find "$T" -maxdepth 1 -name 'intelbrew.*' -print -quit)
 
 start "prompt: empty answer means [S]witch"
 make_existing "$FORK_URL" upstream
-interactive '\nyes\n'
+interactive '\n\nyes\n'   # [S] by default, casks: No, Proceed: yes
 check "exit 0" test "$RC" -eq 0
 check "prompt shown" grep -qF '[S] Switch it to Intelbrew in place (default).' "$T/tty.out"
 check "switched, not uninstalled" brew_at_fork_tag
@@ -872,7 +877,7 @@ finish
 
 start "prompt: [U] then a fresh install from the fork"
 make_existing "$UPSTREAM_URL" upstream
-interactive 'U\nyes\ny\nyes\n'
+interactive 'U\nyes\ny\n\nyes\n'   # U, confirm, uninstaller's y, casks: No, Proceed
 check "exit 0" test "$RC" -eq 0
 check "uninstaller ran with the prefix" logged "uninstaller --path $P"
 check "then planned as fresh" has "Homebrew: fresh install at $P."
@@ -920,6 +925,122 @@ check "nonzero" test "$RC" -ne 0
 check "names the broken symlink" has "broken symlink"
 check "no clone" test ! -e "$P/Homebrew"
 check "no profile (HOME untouched)" test -z "$(find "$H" -mindepth 1 -print -quit)"
+finish
+
+# ---- optional: homebrew/cask (asked before the plan, default No) -------------------
+cask_tap_dir() { echo "$P/Homebrew/Library/Taps/homebrew/homebrew-cask"; }
+CASK_Q='Also enable casks (brew install --cask)? This clones homebrew/cask, about 620 MB.'
+CASK_PLAN='  brew tap homebrew/cask: full clone of Homebrew/homebrew-cask (about 620 MB), for brew install --cask'
+CASK_OFF='  casks: not enabled (brew install --cask needs them; run this again with --casks to add them)'
+cask_tapped_ok() { logged "brew tap homebrew/cask [API=1 REMOTE=$FORK_URL]" && test -d "$(cask_tap_dir)/.git"; }
+no_cask_tap() { ! logged "brew tap homebrew/cask" && test ! -e "$(cask_tap_dir)"; }
+
+start "casks: interactive, empty answer means No"
+interactive '\nyes\n'
+check "exit 0" test "$RC" -eq 0
+check "question asked on the terminal" grep -qF "$CASK_Q [y/N]: " "$T/tty.out"
+check "asked before Proceed" bash -c 'a=$(grep -o "y/N\|Type \"yes\"" "$1" | head -1); [[ "$a" == y/N ]]' _ "$T/tty.out"
+check "plan says not enabled" has "$CASK_OFF"
+check "no cask tap" no_cask_tap
+check "core still set up" remote_is "$FORK_URL"
+finish
+
+start "casks: interactive, answer y taps homebrew/cask"
+interactive 'y\nyes\n'
+check "exit 0" test "$RC" -eq 0
+check "plan shows the tap" has "$CASK_PLAN"
+check "tap line is in the plan, before anything runs" before_in_output "$CASK_PLAN" "+ git clone"
+check "tapped" cask_tapped_ok
+check "after the core tap" bash -c 'a=$(grep -n "^brew tap homebrew/core" "$1" | cut -d: -f1); b=$(grep -n "^brew tap homebrew/cask" "$1" | cut -d: -f1); [[ -n $a && -n $b && $a -lt $b ]]' _ "$LOG"
+check "size notice" has "One-time download: homebrew/cask is about 620 MB."
+check "says enabled" has "Casks enabled: homebrew/cask is tapped"
+finish
+
+start "casks: interactive, y then declining Proceed changes nothing"
+make_existing "$FORK_URL" upstream
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+before="$(snapshot)"
+interactive 'S\ny\nno\n' "${CUR_ENV[@]}"
+check "nonzero" test "$RC" -ne 0
+check "plan showed the tap" has "$CASK_PLAN"
+check "nothing changed" test "$before" = "$(snapshot)"
+check "no cask tap" no_cask_tap
+finish
+
+start "casks: --yes alone keeps the default No and says why"
+run_install
+check "exit 0" test "$RC" -eq 0
+check "says no because of --yes" has "$CASK_Q (no: --yes only makes the required changes)"
+check "plan says not enabled" has "$CASK_OFF"
+check "no cask tap" no_cask_tap
+finish
+
+start "casks: --casks with --yes taps without asking"
+INSTALL_ARGS=(--casks)
+run_install
+check "exit 0" test "$RC" -eq 0
+check "not asked" no_text "$CASK_Q"
+check "plan shows the tap" has "$CASK_PLAN"
+check "tapped" cask_tapped_ok
+check "core tapped too" remote_is "$FORK_URL"
+before="$(snapshot)"; : >"$LOG"
+run_install
+check "re-run: nothing to change" has "Nothing to change"
+check "re-run: no casks hint (already tapped)" no_text "Casks (brew install --cask) are not enabled"
+check "re-run: no change" test "$before" = "$(snapshot)"
+finish
+
+start "casks: INTELBREW_CASKS=1, interactive: taps without asking"
+interactive 'yes\n' INTELBREW_CASKS=1
+check "exit 0" test "$RC" -eq 0
+check "not asked" bash -c '! grep -q "y/N" "$1"' _ "$T/tty.out"
+check "tapped" cask_tapped_ok
+finish
+
+start "casks: already tapped: no question, plan says so"
+make_existing "$UPSTREAM_URL"
+"$REAL_GIT" init -q "$(cask_tap_dir)"
+interactive 'S\nyes\n'
+check "exit 0" test "$RC" -eq 0
+check "not asked" bash -c '! grep -q "y/N" "$1"' _ "$T/tty.out"
+check "plan says already tapped" has "  casks: homebrew/cask is already tapped (not changed)"
+check "no cask tap" bash -c '! grep -q "brew tap homebrew/cask" "$1"' _ "$LOG"
+finish
+
+start "casks: already set up otherwise: --casks taps it; without it, a hint and no change"
+make_existing "$FORK_URL"
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+before="$(snapshot)"
+run_install "${CUR_ENV[@]}"
+check "exit 0" test "$RC" -eq 0
+check "nothing to change" has "Nothing to change"
+check "hint" has "Casks (brew install --cask) are not enabled; to add them, run this again with --casks"
+check "no change" test "$before" = "$(snapshot)"
+INSTALL_ARGS=(--casks)
+run_install "${CUR_ENV[@]}"
+check "--casks: exit 0" test "$RC" -eq 0
+check "--casks: not 'Nothing to change'" no_text "Nothing to change"
+check "--casks: plan shows the tap" has "$CASK_PLAN"
+check "--casks: tapped" cask_tapped_ok
+check "--casks: no brew update needed for it" bash -c '! grep -q "^brew update" "$1"' _ "$LOG"
+check "--casks: profile untouched" no_backups
+finish
+
+start "casks: tap failure warns, core setup still completes"
+INSTALL_ARGS=(--casks)
+run_install STUB_CASK_TAP=fail
+check "exit 0" test "$RC" -eq 0
+check "warns" has "brew tap homebrew/cask failed"
+check "core set up" remote_is "$FORK_URL"
+check "profile written" grep -qxF "$LINE_REMOTE" "$H/.zshenv"
+check "brew update ran" logged "brew update"
+finish
+
+start "unknown option still refused"
+INSTALL_ARGS=(--cask)
+run_install
+check "exit 2" test "$RC" -eq 2
+check "says unknown" has "unknown option: --cask"
 finish
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

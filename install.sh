@@ -53,6 +53,10 @@
 # Options / environment:
 #   --yes, INTELBREW_YES=1   don't ask before each change (still prints them);
 #                            optional changes that default to No are not made
+#   --casks, INTELBREW_CASKS=1
+#                            also tap homebrew/cask (brew install --cask; a full
+#                            clone, about 620 MB) without asking, even with --yes.
+#                            Without it the installer asks, default No.
 #   INTELBREW_PREFIX         install prefix, default /usr/local (for testing only:
 #                            Intel bottles are only relocatable to /usr/local)
 #   INTELBREW_TTY_IN/_OUT    where answers are read / prompts written, default
@@ -85,10 +89,12 @@ LINE_BREW="export HOMEBREW_BREW_GIT_REMOTE=\"$BREW_GIT_REMOTE\""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 ASSUME_YES="${INTELBREW_YES:-0}"
+WANT_CASKS="${INTELBREW_CASKS:-0}"
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,59p' "$0" 2>/dev/null || true; exit 0 ;;
+    --casks) WANT_CASKS=1 ;;
+    -h|--help) sed -n '2,63p' "$0" 2>/dev/null || true; exit 0 ;;
     *) printf 'Error: unknown option: %s\n' "$arg" >&2; exit 2 ;;
   esac
 done
@@ -544,6 +550,19 @@ fi
 
 plan_profiles
 
+# ---- 3c. optional: homebrew/cask ---------------------------------------------------
+# In git mode `brew install --cask X` finds nothing until homebrew/cask is tapped (a full
+# clone of upstream Homebrew/homebrew-cask). Optional: asked before the plan, default No;
+# --casks / INTELBREW_CASKS=1 turns it on without asking.
+CASK_SIZE="about 620 MB"
+cask_dir() { printf '%s/homebrew-cask' "$(dirname "$core")"; }
+cask_tapped=0
+[[ ! -d "$(cask_dir)/.git" ]] || cask_tapped=1
+cask_action=none   # none | tap | declined
+if (( cask_tapped == 0 )); then
+  if [[ "$WANT_CASKS" == "1" ]]; then cask_action=tap; else cask_action=declined; fi
+fi
+
 # ---- 4. plan ---------------------------------------------------------------------
 dirs=(Homebrew bin etc include lib sbin share opt var Cellar Caskroom Frameworks
       share/zsh share/zsh/site-functions var/homebrew var/homebrew/linked)
@@ -685,7 +704,7 @@ env_is_current() {  # does the shell that started the installer already have all
 }
 
 say "macOS $macos, $arch. Homebrew: $mode install at $PREFIX."
-if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$brew_action" == none ]]; then
+if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$brew_action" == none && "$cask_action" != tap ]]; then
   if (( ${#targets[@]} > 0 )); then
     say "Already set up: Homebrew/brew comes from $BREW_GIT_REMOTE${fork_tag:+ ($fork_tag)}, homebrew/core from $CORE_GIT_REMOTE, and ${targets[*]} has all three settings. Nothing to change."
   else
@@ -693,6 +712,7 @@ if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$brew_action"
     warn "Unrecognised login shell (${SHELL:-unset}). Make sure its startup file has:"
     printf '  %s\n  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE" "$LINE_BREW"
   fi
+  (( cask_tapped == 1 )) || say "Casks (brew install --cask) are not enabled; to add them, run this again with --casks ($CASK_SIZE)."
   [[ "$mode" != "existing" ]] || report_installed
   env_is_current || action_box
   exit 0
@@ -700,6 +720,12 @@ fi
 
 need_update=0
 [[ "$core_action" == "none" && "$brew_action" == none ]] || need_update=1
+
+# Asked before the plan, so the plan shows the answer and "Proceed?" covers it.
+if [[ "$cask_action" == declined ]] &&
+   offer "Also enable casks (brew install --cask)? This clones homebrew/cask, $CASK_SIZE."; then
+  cask_action=tap
+fi
 
 say "Plan:"
 if [[ "$mode" == "fresh" ]]; then
@@ -734,6 +760,11 @@ case "$core_action" in
           printf '    set origin to %s (was %s)\n' "$CORE_GIT_REMOTE" "${current:-unset}"
           printf '    fetch it and check out its main: local branch "main" is reset to origin/main;\n'
           printf '    any local commits on it are discarded (the tree is clean, checked above)\n' ;;
+esac
+case "$cask_action" in
+  tap)      printf '  brew tap homebrew/cask: full clone of Homebrew/homebrew-cask (%s), for brew install --cask\n' "$CASK_SIZE" ;;
+  declined) printf '  casks: not enabled (brew install --cask needs them; run this again with --casks to add them)\n' ;;
+  none)     printf '  casks: homebrew/cask is already tapped (not changed)\n' ;;
 esac
 if (( ${#targets[@]} > 0 )); then
   show_profile_plan
@@ -816,6 +847,16 @@ verify_core() {
   say "Verified: homebrew/core origin is $(git -C "$core" config --get remote.origin.url) ($(git -C "$core" rev-parse --short HEAD))."
 }
 verify_core
+
+if [[ "$cask_action" == tap ]]; then
+  # Optional: a failure here is reported but doesn't undo or stop the core setup.
+  say "One-time download: homebrew/cask is $CASK_SIZE."
+  if run "$BREW" tap homebrew/cask && [[ -d "$(cask_dir)/.git" ]]; then
+    say "Casks enabled: homebrew/cask is tapped at $(cask_dir)."
+  else
+    warn "brew tap homebrew/cask failed (see above). Everything else continues; to retry later, run: brew tap homebrew/cask"
+  fi
+fi
 
 apply_profiles
 

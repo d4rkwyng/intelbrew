@@ -51,7 +51,8 @@ Both lines should mention `d4rkwyng`. To check the core tap itself,
 `git -C "$(brew --repository homebrew/core)" remote get-url origin` should print the
 fork's URL. Then use `brew install` and `brew upgrade` as usual.
 
-**Apps (`brew install --cask`)** need `brew tap homebrew/cask` once (about 620 MB); see
+**Apps (`brew install --cask`)** need `brew tap homebrew/cask` once (about 620 MB). The
+installer offers it (default No), or pass `--casks`; see
 [below](#brew-install---cask-says-no-cask-with-this-name-exists). Everything the installer
 checks and changes is in [docs/installer.md](docs/installer.md).
 
@@ -80,7 +81,13 @@ builder (an Intel Sonoma VM), from its daily reports:
 ### `brew install --cask` says "No Cask with this name exists"
 
 Casks leave API mode too, so tap them once: `brew tap homebrew/cask`. That's a full clone
-of about 620 MB, kept current by `brew update`. Intelbrew does not build or test casks:
+of about 620 MB, kept current by `brew update`. The installer asks whether to do this for
+you (default No; `--yes` alone skips it). To have it done unasked, pass `--casks` or set
+`INTELBREW_CASKS=1`, for example (also fine later, on a Mac already set up):
+
+```sh
+INTELBREW_CASKS=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
+``` Intelbrew does not build or test casks:
 they are upstream app downloads, each with its own macOS minimum (for example, Vivaldi
 needs Ventura).
 

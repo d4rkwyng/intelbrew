@@ -84,6 +84,14 @@ place (every copy; no line is deleted). Each edited file is backed up next to it
 - It refuses if an existing homebrew/core tap is a shallow clone, since `brew update`
   refuses those. It prints the `git fetch --unshallow` command to run first.
 
+## Casks (optional)
+
+Before printing the plan it asks: *Also enable casks (brew install --cask)? This clones
+homebrew/cask, about 620 MB.* The default is No; if you say yes, `brew tap homebrew/cask`
+appears in the plan and runs after the core tap. If homebrew/cask is already tapped it
+doesn't ask, and the plan says so. If the cask clone fails, it warns and carries on; the
+core setup is unaffected.
+
 ## Download size and the ACTION NEEDED note
 
 Before the first core clone it tells you it's a one-time download of about 1.3 GB
@@ -114,6 +122,8 @@ installer warns if `brew update` leaves Homebrew/brew off the release tag.
 - `--yes`, or `INTELBREW_YES=1`: don't ask before each change. It still prints them.
   Optional changes that default to No are not made. With an existing Homebrew it always
   switches in place.
+- `--casks`, or `INTELBREW_CASKS=1`: tap homebrew/cask without asking, also with `--yes`.
+  On an otherwise set-up Mac this only adds the cask tap.
 
 ## More questions
 
