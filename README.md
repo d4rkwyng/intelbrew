@@ -1,55 +1,54 @@
 # Intelbrew
 
-Keeping Homebrew usable on Intel Macs.
+Ready-made Homebrew packages for Intel Macs.
 
-Homebrew made Intel macOS a Tier 3 platform in September 2026. Upstream no longer builds
-x86_64 bottles and plans to remove Intel support in or after September 2027. Intelbrew
-rebuilds x86_64 bottles for the most-installed homebrew-core formulae every week, on our
-own Intel macOS Sonoma builder. After you switch over, plain `brew install` and
-`brew upgrade` use them. There's no wrapper command.
+Homebrew no longer builds ready-made packages ("bottles") for Intel Macs, so `brew install`
+falls back to compiling from source, which can take a long time. Intelbrew builds them
+every week on its own Intel macOS builder. Run one command to switch, then use `brew` as normal.
 
 ## Is this for me?
 
-You can use Intelbrew if all of these are true:
+- An **Intel Mac** (not Apple Silicon).
+- **macOS 14 Sonoma or newer**, including Sequoia and Tahoe through OpenCore Legacy
+  Patcher.
+- **Not a Core 2 or Penryn CPU.** Macs from 2011 on are fine; some 2010 models are too.
+- Apple's **Command Line Tools**. If you don't have them, run `xcode-select --install`.
 
-- **You have an Intel (x86_64) Mac.** Apple Silicon Macs should use upstream Homebrew.
-  The installer refuses to run there, including under Rosetta.
-- **You run macOS 14 Sonoma or newer.** Sonoma bottles also serve Sequoia and Tahoe on
-  Intel, including Macs running them through OpenCore Legacy Patcher. The installer
-  refuses macOS 13 Ventura and older, where the bottles wouldn't be used.
-- **Your CPU is Westmere or newer.** Homebrew's Intel bottles for Ventura and later target
-  Westmere, so ours do too. **Core 2 and Penryn Macs** (including many OpenCore Legacy
-  Patcher machines) **are not supported**: the bottles won't run on them. The installer
-  checks for SSE4.2, POPCNT, AES and PCLMULQDQ. To check yourself, run this; it should
-  print `4`:
-
-  ```sh
-  sysctl -n machdep.cpu.features | tr ' ' '\n' | grep -cxE 'SSE4\.2|POPCNT|AES|PCLMULQDQ'
-  ```
-
-- **You have the Command Line Tools** (`xcode-select --install`). Homebrew needs them on
-  Intel even to pour bottles.
+The installer checks all of these and stops, without changing anything, if one is
+missing. The exact CPU check is in [docs/installer.md](docs/installer.md#before-it-starts).
 
 ## Install
 
-Run this in Terminal:
+Paste this into Terminal:
 
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
 ```
 
-- It prints every change and asks before making it.
-- The first time, it downloads homebrew-core from the fork: a one-time download of about
-  1.3 GB (roughly 5-15 minutes).
-- When it finishes, open a new terminal window. Windows that were already open, including
-  the one you ran it from, keep the old settings until you restart them
-  (`exec $SHELL -l`).
-- To check it worked, in a new terminal: `brew config` should list all three variables
-  (see [How it works](#how-it-works)), and this should print the fork's URL:
+What you'll see:
 
-  ```sh
-  git -C "$(brew --repository homebrew/core)" remote get-url origin
-  ```
+1. If you already have Homebrew, a choice: press **Enter** to switch it in place and keep
+   your installed packages.
+2. A list of every change it will make. Type the word **`yes`** and press Enter to go
+   ahead. Anything else stops it with nothing changed.
+3. Possibly your Mac password, if it needs to create folders in `/usr/local`. Nothing
+   shows on screen while you type it; that's normal.
+4. A one-time download of about 1.3 GB (roughly 5-15 minutes).
+5. A boxed **ACTION NEEDED** note at the end: quit Terminal and open it again. Windows
+   that were already open keep the old settings until restarted (`exec $SHELL -l`).
+
+To check it worked, in the new Terminal window:
+
+```sh
+brew config | grep GIT_REMOTE
+```
+
+Both lines should mention `d4rkwyng`. To check the core tap itself,
+`git -C "$(brew --repository homebrew/core)" remote get-url origin` should print the
+fork's URL. Then use `brew install` and `brew upgrade` as usual.
+
+**Apps (`brew install --cask`)** need one extra step the first time:
+`brew tap homebrew/cask` (about 620 MB). See [below](#brew-install---cask-says-no-cask-with-this-name-exists).
 
 The full list of what the installer checks and changes is in
 [docs/installer.md](docs/installer.md).
@@ -75,8 +74,7 @@ There's no Intelbrew bottle for it yet, or there won't be one. The usual reasons
 
 - It's outside the top set (see [Coverage](#coverage)).
 - Its version changed upstream and its new bottle is still in the rebuild backlog.
-- Its Intel build broke. It's held at its last working version until it's fixed; held
-  formulae are listed in the weekly status.
+- Its Intel build broke. It's held at its last working version until it's fixed.
 - It was still stuck after 8 weeks, so it was dropped: Intelbrew stops building bottles
   for it and `brew install` builds it from source. See [DROPPED.md](DROPPED.md).
 - It can't be built on our Sonoma builder, for example because it needs a full Xcode or a
@@ -131,6 +129,11 @@ rebuilt, `brew install` builds it from source, which can take a long time for bi
 formulae. That fills in over the following days and weeks.
 
 ## How it works
+
+Homebrew made Intel macOS a Tier 3 platform in September 2026. Upstream no longer builds
+x86_64 bottles and plans to remove Intel support in or after September 2027. Intelbrew
+rebuilds x86_64 bottles for the most-installed homebrew-core formulae every week, on our
+own Intel macOS Sonoma builder. There's no wrapper command: plain `brew` uses them.
 
 Intelbrew publishes a fork of homebrew-core, `intelbrew-core`. It is upstream's formulae
 plus bottle blocks pointing at x86_64 Sonoma bottles hosted on that fork's GitHub

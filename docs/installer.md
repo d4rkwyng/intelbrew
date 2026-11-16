@@ -9,6 +9,17 @@ It refuses to run on Apple Silicon (including under Rosetta), on macOS 13 Ventur
 older, on a CPU without SSE4.2, POPCNT, AES and PCLMULQDQ (Core 2 / Penryn), and without
 the Command Line Tools. See [Is this for me?](../README.md#is-this-for-me).
 
+The CPU check matches Homebrew's Intel bottles for Ventura and later, which target
+Westmere. Core 2 and Penryn Macs (including many OpenCore Legacy Patcher machines) can't
+run them. To run the same check yourself (it should print `4`):
+
+```sh
+sysctl -n machdep.cpu.features | tr ' ' '\n' | grep -cxE 'SSE4\.2|POPCNT|AES|PCLMULQDQ'
+```
+
+The Command Line Tools are needed on Intel even to pour bottles. It also refuses to run as
+root or with `sudo` (it asks for `sudo` itself when it needs it).
+
 ## No Homebrew yet
 
 It clones Homebrew from `d4rkwyng/brew` to `/usr/local/Homebrew` and checks out its
