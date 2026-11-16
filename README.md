@@ -4,7 +4,7 @@ Ready-made Homebrew packages for Intel Macs.
 
 Homebrew no longer builds ready-made packages ("bottles") for Intel Macs, so `brew install`
 falls back to compiling from source, which can take a long time. Intelbrew builds them
-every week on its own Intel macOS builder. Run one command to switch, then use `brew` as normal.
+every day on its own Intel macOS builder. Run one command to switch, then use `brew` as normal.
 
 ## Is this for me?
 
@@ -121,7 +121,7 @@ checks out the newest.
 ## Coverage
 
 Intelbrew bottles the top 500 formulae by installs, plus their dependencies and build
-dependencies: about 880 formulae. Formulae outside that set still update weekly, but build
+dependencies: about 880 formulae. Formulae outside that set still get upstream updates daily, but build
 from source. **Coverage is partial right now:** bottles were first published in week 43 of
 2026, and after each sync with upstream, formulae whose version changed need a new Intel
 build; there is currently a backlog of them being rebuilt. Until a formula's bottle is
@@ -132,7 +132,7 @@ formulae. That fills in over the following days and weeks.
 
 Homebrew made Intel macOS a Tier 3 platform in September 2026. Upstream no longer builds
 x86_64 bottles and plans to remove Intel support in or after September 2027. Intelbrew
-rebuilds x86_64 bottles for the most-installed homebrew-core formulae every week, on our
+rebuilds x86_64 bottles for the most-installed homebrew-core formulae every day, on our
 own Intel macOS Sonoma builder. There's no wrapper command: plain `brew` uses them.
 
 Intelbrew publishes a fork of homebrew-core, `intelbrew-core`. It is upstream's formulae
