@@ -114,3 +114,31 @@ installer warns if `brew update` leaves Homebrew/brew off the release tag.
 - `--yes`, or `INTELBREW_YES=1`: don't ask before each change. It still prints them.
   Optional changes that default to No are not made. With an existing Homebrew it always
   switches in place.
+
+## More questions
+
+### I have a formula that's newer than Intelbrew's
+
+That happens if you installed it earlier from Homebrew's API. It stays as it is, since
+brew never downgrades, until Intelbrew catches up. A reinstall would use the older fork
+version. The installer lists these formulae for you (see
+[above](#newer-formulae-and-formulae-with-no-bottle)).
+
+### How do I update?
+
+As usual: `brew update` and `brew upgrade`.
+
+### I already have Homebrew. What happens?
+
+By default the installer switches it to Intelbrew in place. Nothing is reinstalled and no
+formulae are removed. Formulae you already have stay as they are; new installs and
+upgrades use Intelbrew bottles where there is one. You can also choose to uninstall and
+install fresh, or quit. See [Existing Homebrew](#existing-homebrew).
+
+### Can I switch by hand, without the installer?
+
+Yes. Add the three `export` lines from the [README](../README.md#how-it-works) to your
+shell profile and open a new terminal. Then run `brew tap homebrew/core` (if you have no
+core tap yet) and `brew update`. `brew update` resets the core and brew remotes to
+`HOMEBREW_CORE_GIT_REMOTE` and `HOMEBREW_BREW_GIT_REMOTE`, fetches the fork's tags and
+checks out the newest.
