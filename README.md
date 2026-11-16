@@ -87,7 +87,9 @@ you (default No; `--yes` alone skips it). To have it done unasked, pass `--casks
 
 ```sh
 INTELBREW_CASKS=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
-``` Intelbrew does not build or test casks:
+```
+
+Intelbrew does not build or test casks:
 they are upstream app downloads, each with its own macOS minimum (for example, Vivaldi
 needs Ventura).
 
