@@ -137,8 +137,11 @@ source. Dropped formulae are listed in [DROPPED.md](DROPPED.md).
 
 - A one-off full clone of homebrew-core (about 1.3 GB). Homebrew never shallow-clones core.
 - `brew update` and formula loading are slower than in API mode.
-- Casks also leave API mode, and `brew install --cask` may need an extra clone. This is
-  not yet verified.
+- Casks also leave API mode, so `brew install --cask` reports "No Cask with this name
+  exists" until you tap them once: `brew tap homebrew/cask`. That is a full clone of
+  about 620 MB (around a minute on a fast connection), and `brew update` keeps it current
+  from then on. intelbrew does not build or test casks: they are upstream app downloads,
+  and each still has its own macOS minimum (for example, Vivaldi needs Ventura).
 
 ## Licensing
 
