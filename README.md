@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/intelbrew-logo.png" alt="Intelbrew logo" width="128" height="128">
+</p>
+
 # Intelbrew
 
 Ready-made Homebrew packages for Intel Macs.
