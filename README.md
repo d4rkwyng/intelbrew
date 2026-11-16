@@ -9,9 +9,9 @@ every week on its own Intel macOS builder. Run one command to switch, then use `
 ## Is this for me?
 
 - An **Intel Mac** (not Apple Silicon).
-- **macOS 14 Sonoma or newer**, including Sequoia and Tahoe through OpenCore Legacy
-  Patcher.
-- **Not a Core 2 or Penryn CPU.** Macs from 2011 on are fine; some 2010 models are too.
+- **macOS 14 Sonoma or newer** (natively, or through OpenCore Legacy Patcher).
+- **Not a Core 2 or Penryn CPU.** Most Macs from 2010-2011 on work; a few Core i3 models
+  don't. The installer checks for you.
 - Apple's **Command Line Tools**. If you don't have them, run `xcode-select --install`.
 
 The installer checks all of these and stops, without changing anything, if one is
