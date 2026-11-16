@@ -53,6 +53,26 @@ fork's URL. Then use `brew install` and `brew upgrade` as usual.
 The full list of what the installer checks and changes is in
 [docs/installer.md](docs/installer.md).
 
+## What you get
+
+With an Intelbrew bottle, `brew install` downloads the finished build and pours it: no
+compiling. This is `hello` on our builder, poured from its Intelbrew bottle in 3.4 seconds:
+
+<img src="docs/images/pour-hello.png" alt="brew install hello: Pouring hello-2.12.3.sonoma.bottle.2.tar.gz, 3.367 s total" width="660">
+
+<sub>Real output, trimmed; Homebrew's Tier 3 notices removed (the builder runs upstream
+brew). "…" marks each cut.</sub>
+
+Without a bottle, the same command compiles from source on your Mac. Build times on our
+builder (an Intel Sonoma VM), from its daily reports:
+
+| Formula | Build time from source |
+|---|---|
+| `llvm` 23.1.5 | 3 h 16 min |
+| `rust` 1.100.0 | 25 min |
+| `node@24` 24.22.2 | 15.5 min |
+| `python@3.14` 3.14.9 | 4.3 min |
+
 ## Common questions
 
 ### `brew install --cask` says "No Cask with this name exists"
@@ -134,6 +154,26 @@ Homebrew made Intel macOS a Tier 3 platform in September 2026. Upstream no longe
 x86_64 bottles and plans to remove Intel support in or after September 2027. Intelbrew
 rebuilds x86_64 bottles for the most-installed homebrew-core formulae every day, on our
 own Intel macOS Sonoma builder. There's no wrapper command: plain `brew` uses them.
+
+```
+upstream homebrew-core
+  │ sync: upstream formulae
+  ▼
+intelbrew-core fork ◄─────────┐
+  │ daily Actions run         │
+  ▼                           │
+Intel macOS 14 builder        │
+  │ build, test, linkage      │
+  ▼                           │
+x86_64 Sonoma bottles         │
+  │ publish                   │
+  ▼                           │
+GitHub Releases ──────────────┘
+  │   bottle blocks → fork main
+  ▼
+pour test from the release URL
+(fails: bottle pulled, pinned)
+```
 
 Intelbrew publishes a fork of homebrew-core, `intelbrew-core`. It is upstream's formulae
 plus bottle blocks pointing at x86_64 Sonoma bottles hosted on that fork's GitHub
