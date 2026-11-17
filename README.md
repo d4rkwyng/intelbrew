@@ -29,6 +29,8 @@ Paste this into Terminal (or the short form, `curl -fsSL https://intelbrew.sh | 
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
 ```
 
+If `intelbrew.sh` doesn't resolve on your network (some DNS filters block newly registered domains), use the long form above; it fetches the same script straight from GitHub.
+
 What you'll see:
 
 1. If you already have Homebrew, a choice: press **Enter** to switch it in place and keep
