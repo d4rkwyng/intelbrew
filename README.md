@@ -21,7 +21,7 @@ every day on its own Intel macOS builder. Run one command to switch, then use `b
 
 ## Is this for me?
 
-<img src="docs/images/mac.png" alt="Pixel-art laptop with a smiling face on its screen" width="96" height="96" align="right" style="image-rendering: pixelated">
+<img src="docs/images/mac.png" alt="Pixel-art laptop with a smiling face on its screen" align="right">
 
 - An **Intel Mac** (not Apple Silicon).
 - **macOS 14 Sonoma or newer** (natively, or through OpenCore Legacy Patcher).
@@ -34,7 +34,7 @@ missing. The exact CPU check is in [docs/installer.md](docs/installer.md#before-
 
 ## Install
 
-<img src="docs/images/terminal.png" alt="Pixel-art purple Terminal window with a prompt and a puff of beer foam" width="96" height="96" align="right" style="image-rendering: pixelated">
+<img src="docs/images/terminal.png" alt="Pixel-art purple Terminal window with a prompt and a puff of beer foam" align="right">
 
 Paste this into Terminal:
 
@@ -117,7 +117,7 @@ needs Ventura).
 
 ### Why is a formula building from source?
 
-<img src="docs/images/turtle.png" alt="Pixel-art turtle in an orange hard hat" width="80" height="80" align="right" style="image-rendering: pixelated">
+<img src="docs/images/turtle.png" alt="Pixel-art turtle in an orange hard hat" align="right">
 
 There's no Intelbrew bottle for it, yet or ever. Either it's outside the top set (see
 [Coverage](#coverage)); its new version is still in the rebuild backlog; its Intel build
