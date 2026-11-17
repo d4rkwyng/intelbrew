@@ -4,6 +4,13 @@
 
 # Intelbrew
 
+<p>
+<a href="https://intelbrew.sh"><img alt="Install: curl -fsSL https://intelbrew.sh | bash" src="https://img.shields.io/badge/install-intelbrew.sh-orange"></a>
+<img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-blue">
+<img alt="Intel (x86_64) Macs only" src="https://img.shields.io/badge/Intel-x86__64%20only-lightgrey">
+<a href="LICENSE"><img alt="License: BSD-2-Clause" src="https://img.shields.io/github/license/d4rkwyng/intelbrew"></a>
+</p>
+
 Ready-made Homebrew packages for Intel Macs.
 
 Homebrew no longer builds ready-made packages ("bottles") for Intel Macs, so `brew install`
