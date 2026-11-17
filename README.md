@@ -11,6 +11,8 @@
 <a href="LICENSE"><img alt="License: BSD-2-Clause" src="https://img.shields.io/github/license/d4rkwyng/intelbrew"></a>
 </p>
 
+**Website: [intelbrew.sh](https://intelbrew.sh)**
+
 Ready-made Homebrew packages for Intel Macs.
 
 Homebrew no longer builds ready-made packages ("bottles") for Intel Macs, so `brew install`
@@ -18,6 +20,8 @@ falls back to compiling from source, which can take a long time. Intelbrew build
 every day on its own Intel macOS builder. Run one command to switch, then use `brew` as normal.
 
 ## Is this for me?
+
+<img src="docs/images/mac.png" alt="Pixel-art laptop with a smiling face on its screen" width="96" height="96" align="right" style="image-rendering: pixelated">
 
 - An **Intel Mac** (not Apple Silicon).
 - **macOS 14 Sonoma or newer** (natively, or through OpenCore Legacy Patcher).
@@ -30,13 +34,19 @@ missing. The exact CPU check is in [docs/installer.md](docs/installer.md#before-
 
 ## Install
 
-Paste this into Terminal (or the short form, `curl -fsSL https://intelbrew.sh | bash`, which runs the same script):
+<img src="docs/images/terminal.png" alt="Pixel-art purple Terminal window with a prompt and a puff of beer foam" width="96" height="96" align="right" style="image-rendering: pixelated">
+
+Paste this into Terminal:
+
+```sh
+curl -fsSL https://intelbrew.sh | bash
+```
+
+If `intelbrew.sh` doesn't resolve on your network (some DNS filters block newly registered domains), use the long form below; it fetches the same script straight from GitHub:
 
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
 ```
-
-If `intelbrew.sh` doesn't resolve on your network (some DNS filters block newly registered domains), use the long form above; it fetches the same script straight from GitHub.
 
 What you'll see:
 
@@ -64,6 +74,9 @@ fork's URL. Then use `brew install` and `brew upgrade` as usual.
 installer offers it (default No), or pass `--casks`; see
 [below](#brew-install---cask-says-no-cask-with-this-name-exists). Everything the installer
 checks and changes is in [docs/installer.md](docs/installer.md).
+
+Want a GUI? [Tankard](https://github.com/d4rkwyng/tankard) is a native Mac app for
+Homebrew: `brew install --cask d4rkwyng/tap/tankard`.
 
 ## What you get
 
@@ -103,6 +116,8 @@ they are upstream app downloads, each with its own macOS minimum (for example, V
 needs Ventura).
 
 ### Why is a formula building from source?
+
+<img src="docs/images/turtle.png" alt="Pixel-art turtle in an orange hard hat" width="80" height="80" align="right" style="image-rendering: pixelated">
 
 There's no Intelbrew bottle for it, yet or ever. Either it's outside the top set (see
 [Coverage](#coverage)); its new version is still in the rebuild backlog; its Intel build
