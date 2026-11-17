@@ -23,7 +23,7 @@ missing. The exact CPU check is in [docs/installer.md](docs/installer.md#before-
 
 ## Install
 
-Paste this into Terminal:
+Paste this into Terminal (or the short form, `curl -fsSL https://intelbrew.sh | bash`, which runs the same script):
 
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"

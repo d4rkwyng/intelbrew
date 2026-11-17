@@ -5,6 +5,8 @@
 # from the Intelbrew fork, which carries x86_64 macOS Sonoma bottles.
 #
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"
+#   curl -fsSL https://intelbrew.sh | bash                    (short form, same script)
+#   curl -fsSL https://intelbrew.sh | bash -s -- --yes        (options when piped)
 #
 # Homebrew/brew itself comes from the Intelbrew brew fork, d4rkwyng/brew: upstream
 # release tags merged with a small patch that replaces brew's Intel "Tier 3" banner with
@@ -50,18 +52,46 @@
 #   - extend/os/mac/utils/bottles.rb (find_matching_tag): brew pours the bottle for
 #     this macOS, else an :all bottle, else one for an older macOS on the same arch.
 #
-# Options / environment:
-#   --yes, INTELBREW_YES=1   don't ask before each change (still prints them);
-#                            optional changes that default to No are not made
-#   --casks, INTELBREW_CASKS=1
-#                            also tap homebrew/cask (brew install --cask; a full
-#                            clone, about 620 MB) without asking, even with --yes.
-#                            Without it the installer asks, default No.
-#   INTELBREW_PREFIX         install prefix, default /usr/local (for testing only:
-#                            Intel bottles are only relocatable to /usr/local)
-#   INTELBREW_TTY_IN/_OUT    where answers are read / prompts written, default
-#                            /dev/tty (for testing only)
+# Options and environment: see usage() below, or run with --help.
+#
+# Safe to pipe into bash: everything runs inside main(), called on the last line, so a
+# download cut short defines main() without running it, or fails to parse at all, and
+# changes nothing. Questions are read from /dev/tty, never from stdin (which, when
+# piped, is the script itself); main() points stdin at /dev/null before anything runs.
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Intelbrew installer: Homebrew in git mode with Intel Sonoma bottles.
+
+Options / environment:
+  --yes, INTELBREW_YES=1   don't ask before each change (still prints them);
+                           optional changes that default to No are not made.
+                           Required when there is no terminal (CI, ssh without -t).
+  --casks, INTELBREW_CASKS=1
+                           also tap homebrew/cask (brew install --cask; a full
+                           clone, about 620 MB) without asking, even with --yes.
+                           Without it the installer asks, default No.
+  -h, --help               show this and exit
+  INTELBREW_PREFIX         install prefix, default /usr/local (for testing only:
+                           Intel bottles are only relocatable to /usr/local)
+  INTELBREW_TTY_IN/_OUT    where answers are read / prompts written, default
+                           /dev/tty (for testing only)
+
+When piped, pass options after "bash -s --":
+  curl -fsSL https://intelbrew.sh | bash -s -- --yes
+EOF
+}
+
+# The whole flow is main(), called on the last line (body not indented, to keep its
+# history readable).
+main() {
+# When piped (curl ... | bash), stdin is the rest of the script. Nothing here reads
+# stdin on purpose: answers come from $TTY_IN (fd 3), and sudo and git ask for
+# passwords on /dev/tty. Point stdin at /dev/null so that no command (git, brew, sudo,
+# a login shell's startup files) can swallow it or block on it.
+exec </dev/null
+
 # sysctl/pkgutil live in /usr/sbin, which a minimal PATH (cron, `env -i`, some IDEs)
 # leaves out; without it the CPU check misreads an Ivy Bridge as a Core 2. Appended,
 # so anything earlier on PATH still wins.
@@ -94,7 +124,7 @@ for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
     --casks) WANT_CASKS=1 ;;
-    -h|--help) sed -n '2,63p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
     *) printf 'Error: unknown option: %s\n' "$arg" >&2; exit 2 ;;
   esac
 done
@@ -151,7 +181,10 @@ EOF
 [[ "$(uname -s)" == "Darwin" ]] || die "Intelbrew is for macOS only."
 [[ "$(id -u)" -ne 0 ]] || die "Don't run this as root or with sudo. It asks for sudo itself if it needs it."
 if [[ "$ASSUME_YES" != "1" ]]; then
-  { : <"$TTY_IN"; } 2>/dev/null || die "No terminal to ask for confirmation. Run it from Terminal, or pass --yes."
+  # No terminal at all (CI, ssh without -t, launchd): opening /dev/tty fails. Stop
+  # here rather than hang, or read answers from a pipe.
+  { : <"$TTY_IN"; } 2>/dev/null \
+    || die "No terminal to ask for confirmation ($TTY_IN can't be opened: CI, or ssh without -t?). Run it from Terminal, or pass --yes (piped: curl -fsSL https://intelbrew.sh | bash -s -- --yes). Nothing was changed."
   exec 3<"$TTY_IN" 4>"$TTY_OUT"
 fi
 
@@ -918,3 +951,6 @@ Formulae without an Intelbrew bottle build from source; see
 https://github.com/d4rkwyng/intelbrew#coverage
 EOF
 action_box
+}
+
+main "$@"

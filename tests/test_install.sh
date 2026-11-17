@@ -79,6 +79,7 @@ S
 cat >"$STUBS/curl" <<'S'
 #!/bin/bash
 echo "curl $*" >>"$STUB_LOG"
+[[ -z "${STUB_EAT_STDIN:-}" ]] || cat >>"$STUB_LOG.stdin"
 [[ "${STUB_CURL:-ok}" != fail ]] || { echo "curl: (6) stub: could not resolve host" >&2; exit 6; }
 out=""
 while [[ $# -gt 0 ]]; do [[ "$1" == -o ]] && { out="$2"; shift; }; shift; done
@@ -94,11 +95,13 @@ S
 cat >"$STUBS/git" <<S
 #!/bin/bash
 echo "git \$*" >>"\$STUB_LOG"
+[[ -z "\${STUB_EAT_STDIN:-}" ]] || cat >>"\$STUB_LOG.stdin"
 exec "$REAL_GIT" "\$@"
 S
 cat >"$STUBS/brew-impl" <<S
 #!/bin/bash
 echo "brew \$* [API=\${HOMEBREW_NO_INSTALL_FROM_API:-} REMOTE=\${HOMEBREW_CORE_GIT_REMOTE:-}]" >>"\$STUB_LOG"
+[[ -z "\${STUB_EAT_STDIN:-}" ]] || cat >>"\$STUB_LOG.stdin"
 core="\$INTELBREW_PREFIX/Homebrew/Library/Taps/homebrew/homebrew-core"
 case "\$*" in
   "--repository homebrew/core") echo "\$core" ;;
@@ -1041,6 +1044,147 @@ INSTALL_ARGS=(--cask)
 run_install
 check "exit 2" test "$RC" -eq 2
 check "says unknown" has "unknown option: --cask"
+finish
+
+# ---- piped: curl -fsSL https://intelbrew.sh | bash -s -- <flags> --------------------
+# run_piped [env...]: like run_install, but the script arrives on stdin, as from curl:
+#   cat "$PIPE_SRC" | bash -s -- "${INSTALL_ARGS[@]}"
+# PIPE_SRC (default install.sh) is what is piped, PIPE_TRAILER is piped after it, and
+# NO_CTTY=1 runs bash in a new session with no controlling terminal (CI, ssh without -t),
+# so /dev/tty can't be opened. INTELBREW_YES defaults to 0 here: flags do the work.
+run_piped() {
+  local wrap=()
+  [[ "${NO_CTTY:-0}" != 1 ]] || wrap=(/usr/bin/python3 -I -c 'import subprocess, sys
+sys.exit(subprocess.run(sys.argv[1:], start_new_session=True, timeout=120).returncode)')
+  OUT="$(set +o pipefail
+    { cat "${PIPE_SRC:-$INSTALL}"; printf '%s' "${PIPE_TRAILER:-}"; } |
+    ${wrap[@]+"${wrap[@]}"} env -i PATH="$STUBS:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$H" SHELL="${SH:-/bin/zsh}" \
+      TMPDIR="$T" INTELBREW_PREFIX="$P" INTELBREW_YES=0 STUB_LOG="$LOG" USER="$(id -un)" \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" "$@" \
+      /bin/bash -s -- ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"} 2>&1)"
+  RC=$?
+}
+fresh_ok() {  # a complete fresh install from the forks
+  [[ "$RC" -eq 0 ]] && brew_at_fork_tag && remote_is "$FORK_URL" && grep -qxF "$LINE_REMOTE" "$H/.zshenv"
+}
+nothing_ran() {  # no stubbed command ran and nothing was written to HOME or the prefix
+  [[ ! -s "$LOG" && -z "$(find "$H" "$P" -mindepth 1 -print -quit)" ]] && no_tmp_left
+}
+stdin_not_eaten() { [[ ! -s "$LOG.stdin" ]]; }
+
+start "piped: --yes after bash -s -- does a fresh install"
+INSTALL_ARGS=(--yes)
+run_piped
+check "installed" fresh_ok
+check "flag seen (no prompt)" has "Proceed? (yes: --yes given)"
+finish
+
+start "piped: --help after bash -s -- prints the options"
+INSTALL_ARGS=(--help)
+run_piped
+check "exit 0" test "$RC" -eq 0
+check "shows --yes" has "--yes, INTELBREW_YES=1"
+check "shows the piped form" has "bash -s -- --yes"
+check "nothing ran" nothing_ran
+finish
+
+start "piped: answers come from INTELBREW_TTY_IN, not from the piped script"
+printf '\nyes\n' >"$T/answers"   # casks: No, Proceed: yes
+run_piped INTELBREW_TTY_IN="$T/answers" INTELBREW_TTY_OUT="$T/tty.out"
+check "installed" fresh_ok
+check "Proceed asked on the tty" grep -qF 'Proceed? Type "yes" to continue: ' "$T/tty.out"
+finish
+
+start "piped: [U]: the uninstaller reads its answer from the tty, not the script"
+make_existing "$UPSTREAM_URL" upstream
+printf 'U\nyes\ny\n\nyes\n' >"$T/answers"   # U, confirm, uninstaller's y, casks: No, Proceed
+run_piped INTELBREW_TTY_IN="$T/answers" INTELBREW_TTY_OUT="$T/tty.out"
+check "uninstaller ran" logged "uninstaller --path $P"
+check "then installed fresh" fresh_ok
+finish
+
+# A subprocess that reads stdin (git, brew, curl here; in real life sudo, a login shell's
+# startup files...) must get /dev/null, not the rest of the piped script. The trailer
+# stands in for "the rest of the script": an eating stub would capture it.
+TRAILER=$'\necho TRAILER-READ-AS-SCRIPT\n'
+start "piped: stdin-reading git/brew get nothing (fresh install)"
+INSTALL_ARGS=(--yes); PIPE_TRAILER="$TRAILER"
+run_piped STUB_EAT_STDIN=1
+check "installed" fresh_ok
+check "git/brew read nothing from stdin" stdin_not_eaten
+PIPE_TRAILER=""
+finish
+
+start "piped: stdin-reading git/brew/curl/uninstaller get nothing ([U] path)"
+make_existing "$UPSTREAM_URL" upstream
+printf 'U\nyes\ny\n\nyes\n' >"$T/answers"
+PIPE_TRAILER="$TRAILER"
+run_piped STUB_EAT_STDIN=1 INTELBREW_TTY_IN="$T/answers" INTELBREW_TTY_OUT="$T/tty.out"
+check "uninstaller ran" logged "uninstaller --path $P"
+check "installed" fresh_ok
+check "nothing read from stdin" stdin_not_eaten
+PIPE_TRAILER=""
+finish
+
+start "piped: stdin-reading git/brew get nothing (existing install, switched in place)"
+make_existing "$UPSTREAM_URL" upstream
+INSTALL_ARGS=(--yes); PIPE_TRAILER="$TRAILER"
+run_piped STUB_EAT_STDIN=1
+check "exit 0" test "$RC" -eq 0
+check "switched" brew_at_fork_tag
+check "brew update ran" logged "brew update"
+check "nothing read from stdin" stdin_not_eaten
+PIPE_TRAILER=""
+finish
+
+# No terminal at all: a new session has no controlling terminal, so /dev/tty can't be
+# opened, exactly as in CI or under ssh without -t.
+start "no tty at all (CI, ssh without -t): stops with a clear message, changes nothing"
+NO_CTTY=1
+run_piped
+NO_CTTY=0
+check "nonzero" test "$RC" -ne 0
+check "says why and what to do" has "No terminal to ask for confirmation"
+check "suggests --yes when piped" has "bash -s -- --yes"
+check "did not time out" no_text "TimeoutExpired"
+check "nothing ran" nothing_ran
+finish
+
+start "no tty at all, with --yes: installs"
+INSTALL_ARGS=(--yes); NO_CTTY=1
+run_piped
+NO_CTTY=0
+check "installed" fresh_ok
+finish
+
+# A download cut short must run nothing. Cut at several byte offsets (mid-line), and just
+# before the final `main "$@"` line.
+TRUNC="$ROOT/truncated.sh"
+size="$(wc -c <"$INSTALL" | tr -d ' ')"
+last_len="$(tail -n 1 "$INSTALL" | wc -c | tr -d ' ')"
+for cut in $((size / 20)) $((size / 4)) $((size / 2)) $((size * 3 / 4)) $((size - 400)) $((size - last_len - 1)); do
+  start "truncated download (first $cut of $size bytes) piped to bash: runs nothing"
+  head -c "$cut" "$INSTALL" >"$TRUNC"
+  INSTALL_ARGS=(--yes --casks); PIPE_SRC="$TRUNC"
+  run_piped
+  PIPE_SRC=""
+  check "nothing ran" nothing_ran
+  check "no installer output" bash -c '! grep -qE "^(==>|\+ |Error: |Warning: |=====)" <<<"$1"' _ "$OUT"
+  check "nonzero, or silent success that did nothing" bash -c '[[ "$1" -ne 0 || -z "$2" ]]' _ "$RC" "$OUT"
+  finish
+done
+
+# Cut inside the last line, right after "main": main runs, but WITHOUT the arguments,
+# i.e. in its most cautious mode (it asks first), so with no terminal it just stops.
+start "truncated inside the last line ('main' without \"\$@\"): asks, no tty: stops"
+head -c "$((size - last_len + 4))" "$INSTALL" >"$TRUNC"
+check "really ends in 'main'" test "$(tail -c 5 "$TRUNC")" = $'\nmain'
+INSTALL_ARGS=(--yes --casks); PIPE_SRC="$TRUNC"; NO_CTTY=1
+run_piped
+PIPE_SRC=""; NO_CTTY=0
+check "nonzero" test "$RC" -ne 0
+check "stopped at the terminal check" has "No terminal to ask for confirmation"
+check "nothing ran" nothing_ran
 finish
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

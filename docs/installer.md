@@ -125,6 +125,11 @@ installer warns if `brew update` leaves Homebrew/brew off the release tag.
 - `--casks`, or `INTELBREW_CASKS=1`: tap homebrew/cask without asking, also with `--yes`.
   On an otherwise set-up Mac this only adds the cask tap.
 
+With the short form, put options after `bash -s --`:
+`curl -fsSL https://intelbrew.sh | bash -s -- --yes`. Questions are always read from
+the terminal, not from the pipe. With no terminal at all (CI, `ssh` without `-t`) the
+installer stops, changing nothing, unless `--yes` is given.
+
 ## More questions
 
 ### I have a formula that's newer than Intelbrew's
