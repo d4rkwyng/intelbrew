@@ -75,8 +75,18 @@ installer offers it (default No), or pass `--casks`; see
 [below](#brew-install---cask-says-no-cask-with-this-name-exists). Everything the installer
 checks and changes is in [docs/installer.md](docs/installer.md).
 
-Want a GUI? [Tankard](https://github.com/d4rkwyng/tankard) is a native Mac app for
-Homebrew: `brew install --cask d4rkwyng/tap/tankard`.
+## Want a GUI?
+
+[Tankard](https://github.com/d4rkwyng/tankard) is a Mac app for Homebrew that knows about
+Intelbrew: it shows which packages come as an Intelbrew bottle and which would compile,
+warns before a long build, and can switch back to standard Homebrew. It runs on macOS 14
+and later, Intel Macs included.
+
+```sh
+brew install --cask d4rkwyng/tap/tankard
+```
+
+Or download it from [Releases](https://github.com/d4rkwyng/tankard/releases/latest).
 
 ## What you get
 
