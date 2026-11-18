@@ -232,6 +232,6 @@ The scripts and docs here are BSD-2-Clause, like Homebrew ([LICENSE](LICENSE)). 
 built from upstream formulae (Intel fixes are in the fork's history) and keep each
 project's own licence; for GPL/LGPL software the corresponding source is published in the
 same GitHub Release as the bottle. Intelbrew is independent: not affiliated with or
-endorsed by Homebrew, and not affiliated with `rhyn-daitenku/intelbrew`. Homebrew, Apple,
+endorsed by Homebrew. Homebrew, Apple,
 Mac, macOS and Intel are trademarks of their respective owners, used only to describe
 compatibility.

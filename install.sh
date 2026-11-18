@@ -173,7 +173,7 @@ normalize_url() {
 cat <<'EOF'
 ========================================================================
   Intelbrew installer: Homebrew in git mode with Intel Sonoma bottles.
-  Intelbrew is not affiliated with Homebrew or with rhyn-daitenku/intelbrew.
+  Intelbrew is not affiliated with Homebrew.
 ========================================================================
 EOF
 
