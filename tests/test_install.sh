@@ -657,12 +657,12 @@ finish
 start "item 8: brew on a different, unknown fork: switched (no offer, no reset)"
 make_existing "$FORK_URL" "https://github.com/someone/brew"
 printf '%s\n' "$ALL3" >"$H/.zshenv"
-interactive 'S\n\nyes\n' "${CUR_ENV[@]}"   # S, casks: No, Proceed: yes
+interactive 'S\nn\nyes\n' "${CUR_ENV[@]}"   # S, casks: n, Proceed: yes
 check "exit 0" test "$RC" -eq 0
 check "plan names the other fork" has "set origin to $BREW_FORK (was a different Homebrew/brew fork: https://github.com/someone/brew)"
 check "only the Proceed question" test "$(grep -o 'Type "yes"' "$T/tty.out" | wc -l | tr -d ' ')" = 1
-check "the only y/N offer is the casks one" test "$(grep -o 'y/N' "$T/tty.out" | wc -l | tr -d ' ')" = 1
-check "and it is about casks" grep -qF 'Also enable casks' "$T/tty.out"
+check "the only Y/n question is the casks one" test "$(grep -o 'Y/n' "$T/tty.out" | wc -l | tr -d ' ')" = 1
+check "and it is about casks" grep -qF 'Enable casks?' "$T/tty.out"
 check "brew on the fork tag" brew_at_fork_tag
 check "profile untouched" no_backups
 finish
@@ -671,7 +671,7 @@ start "item 8: declining the plan changes nothing"
 make_existing "$FORK_URL" upstream
 printf '%s\n' "$ALL3" >"$H/.zshenv"
 before="$(snapshot)"
-interactive 'S\n\n\n' "${CUR_ENV[@]}"   # S, casks: No, Proceed: (empty)
+interactive 'S\nn\n\n' "${CUR_ENV[@]}"   # S, casks: n, Proceed: (empty)
 check "nonzero" test "$RC" -ne 0
 check "stopped" has "Stopped. Nothing was changed."
 check "nothing changed" test "$before" = "$(snapshot)"
@@ -829,7 +829,7 @@ no_tmp_left() { [[ -z "$(find "$T" -maxdepth 1 -name 'intelbrew.*' -print -quit)
 
 start "prompt: empty answer means [S]witch"
 make_existing "$FORK_URL" upstream
-interactive '\n\nyes\n'   # [S] by default, casks: No, Proceed: yes
+interactive '\nn\nyes\n'   # [S] by default, casks: n, Proceed: yes
 check "exit 0" test "$RC" -eq 0
 check "prompt shown" grep -qF '[S] Switch it to Intelbrew in place (default).' "$T/tty.out"
 check "switched, not uninstalled" brew_at_fork_tag
@@ -880,7 +880,7 @@ finish
 
 start "prompt: [U] then a fresh install from the fork"
 make_existing "$UPSTREAM_URL" upstream
-interactive 'U\nyes\ny\n\nyes\n'   # U, confirm, uninstaller's y, casks: No, Proceed
+interactive 'U\nyes\ny\nn\nyes\n'   # U, confirm, uninstaller's y, casks: n, Proceed
 check "exit 0" test "$RC" -eq 0
 check "uninstaller ran with the prefix" logged "uninstaller --path $P"
 check "then planned as fresh" has "Homebrew: fresh install at $P."
@@ -930,22 +930,52 @@ check "no clone" test ! -e "$P/Homebrew"
 check "no profile (HOME untouched)" test -z "$(find "$H" -mindepth 1 -print -quit)"
 finish
 
-# ---- optional: homebrew/cask (asked before the plan, default No) -------------------
+# ---- optional: homebrew/cask (asked whenever it is off, default Yes) ---------------
 cask_tap_dir() { echo "$P/Homebrew/Library/Taps/homebrew/homebrew-cask"; }
-CASK_Q='Also enable casks (brew install --cask)? This clones homebrew/cask, about 620 MB.'
+CASK_Q='Enable casks? One-time download, about 620 MB. [Y/n]: '
+CASK_BOX='| Casks are OFF: apps installed with brew install --cask'
+CASK_HINT='Casks (brew install --cask) are not enabled; to add them, run this again with --casks (about 620 MB).'
+CASK_YES_NO='Enable casks? (no: --yes only makes the required changes)'
 CASK_PLAN='  brew tap homebrew/cask: full clone of Homebrew/homebrew-cask (about 620 MB), for brew install --cask'
 CASK_OFF='  casks: not enabled (brew install --cask needs them; run this again with --casks to add them)'
 cask_tapped_ok() { logged "brew tap homebrew/cask [API=1 REMOTE=$FORK_URL]" && test -d "$(cask_tap_dir)/.git"; }
 no_cask_tap() { ! logged "brew tap homebrew/cask" && test ! -e "$(cask_tap_dir)"; }
 
-start "casks: interactive, empty answer means No"
+start "casks: fresh, interactive, Enter (empty answer) means Yes"
 interactive '\nyes\n'
 check "exit 0" test "$RC" -eq 0
-check "question asked on the terminal" grep -qF "$CASK_Q [y/N]: " "$T/tty.out"
-check "asked before Proceed" bash -c 'a=$(grep -o "y/N\|Type \"yes\"" "$1" | head -1); [[ "$a" == y/N ]]' _ "$T/tty.out"
+check "boxed note on the terminal" grep -qF "$CASK_BOX" "$T/tty.out"
+check "question asked on the terminal" grep -qF "$CASK_Q" "$T/tty.out"
+check "asked before Proceed" bash -c 'a=$(grep -o "Y/n\|Type \"yes\"" "$1" | head -1); [[ "$a" == Y/n ]]' _ "$T/tty.out"
+check "plan shows the tap" has "$CASK_PLAN"
+check "tapped" cask_tapped_ok
+check "core still set up" remote_is "$FORK_URL"
+finish
+
+start "casks: fresh, interactive, answer n: no tap, hint"
+interactive 'n\nyes\n'
+check "exit 0" test "$RC" -eq 0
 check "plan says not enabled" has "$CASK_OFF"
+check "hint" has "$CASK_HINT"
 check "no cask tap" no_cask_tap
 check "core still set up" remote_is "$FORK_URL"
+finish
+
+start "casks: fresh, interactive, unclear answer is asked again"
+interactive 'maybe\nN\nyes\n'
+check "exit 0" test "$RC" -eq 0
+check "asked twice" test "$(grep -o 'Y/n' "$T/tty.out" | wc -l | tr -d ' ')" = 2
+check "says how to answer" grep -qF 'Please answer y or n.' "$T/tty.out"
+check "no cask tap" no_cask_tap
+finish
+
+start "casks: fresh, --no-casks: not asked, not tapped"
+INSTALL_ARGS=(--no-casks)
+interactive 'yes\n'
+check "exit 0" test "$RC" -eq 0
+check "not asked" bash -c '! grep -q "Y/n" "$1"' _ "$T/tty.out"
+check "plan says not enabled" has "$CASK_OFF"
+check "no cask tap" no_cask_tap
 finish
 
 start "casks: interactive, answer y taps homebrew/cask"
@@ -970,10 +1000,11 @@ check "nothing changed" test "$before" = "$(snapshot)"
 check "no cask tap" no_cask_tap
 finish
 
-start "casks: --yes alone keeps the default No and says why"
+start "casks: --yes alone does not tap and says why"
 run_install
 check "exit 0" test "$RC" -eq 0
-check "says no because of --yes" has "$CASK_Q (no: --yes only makes the required changes)"
+check "says no because of --yes" has "$CASK_YES_NO"
+check "hint" has "$CASK_HINT"
 check "plan says not enabled" has "$CASK_OFF"
 check "no cask tap" no_cask_tap
 finish
@@ -982,7 +1013,7 @@ start "casks: --casks with --yes taps without asking"
 INSTALL_ARGS=(--casks)
 run_install
 check "exit 0" test "$RC" -eq 0
-check "not asked" no_text "$CASK_Q"
+check "not asked" no_text "Enable casks?"
 check "plan shows the tap" has "$CASK_PLAN"
 check "tapped" cask_tapped_ok
 check "core tapped too" remote_is "$FORK_URL"
@@ -996,7 +1027,7 @@ finish
 start "casks: INTELBREW_CASKS=1, interactive: taps without asking"
 interactive 'yes\n' INTELBREW_CASKS=1
 check "exit 0" test "$RC" -eq 0
-check "not asked" bash -c '! grep -q "y/N" "$1"' _ "$T/tty.out"
+check "not asked" bash -c '! grep -q "Y/n" "$1"' _ "$T/tty.out"
 check "tapped" cask_tapped_ok
 finish
 
@@ -1005,7 +1036,7 @@ make_existing "$UPSTREAM_URL"
 "$REAL_GIT" init -q "$(cask_tap_dir)"
 interactive 'S\nyes\n'
 check "exit 0" test "$RC" -eq 0
-check "not asked" bash -c '! grep -q "y/N" "$1"' _ "$T/tty.out"
+check "not asked" bash -c '! grep -q "Y/n" "$1"' _ "$T/tty.out"
 check "plan says already tapped" has "  casks: homebrew/cask is already tapped (not changed)"
 check "no cask tap" bash -c '! grep -q "brew tap homebrew/cask" "$1"' _ "$LOG"
 finish
@@ -1017,7 +1048,8 @@ before="$(snapshot)"
 run_install "${CUR_ENV[@]}"
 check "exit 0" test "$RC" -eq 0
 check "nothing to change" has "Nothing to change"
-check "hint" has "Casks (brew install --cask) are not enabled; to add them, run this again with --casks"
+check "hint" has "$CASK_HINT"
+check "says no because of --yes" has "$CASK_YES_NO"
 check "no change" test "$before" = "$(snapshot)"
 INSTALL_ARGS=(--casks)
 run_install "${CUR_ENV[@]}"
@@ -1027,6 +1059,85 @@ check "--casks: plan shows the tap" has "$CASK_PLAN"
 check "--casks: tapped" cask_tapped_ok
 check "--casks: no brew update needed for it" bash -c '! grep -q "^brew update" "$1"' _ "$LOG"
 check "--casks: profile untouched" no_backups
+finish
+
+# The re-run case: Intelbrew already set up, casks off, run again from a terminal.
+setup_done_no_casks() {
+  make_existing "$FORK_URL"
+  printf '%s\n' "$ALL3" >"$H/.zshenv"
+}
+start "casks: already set up, interactive y: taps casks only, exits cleanly"
+setup_done_no_casks
+interactive 'S\ny\n' "${CUR_ENV[@]}"   # S, casks: y
+check "exit 0" test "$RC" -eq 0
+check "still says already set up" has "Already set up"
+check "boxed note on the terminal" grep -qF "$CASK_BOX" "$T/tty.out"
+check "asked" grep -qF "$CASK_Q" "$T/tty.out"
+check "no Proceed question" bash -c '! grep -q "Type \"yes\"" "$1"' _ "$T/tty.out"
+check "tapped" cask_tapped_ok
+check "says enabled" has "Casks enabled: homebrew/cask is tapped"
+check "no hint" no_text "$CASK_HINT"
+check "nothing else ran" bash -c '! grep -qE "^brew update|config remote|checkout|^git clone" "$1"' _ "$LOG"
+check "profile untouched" no_backups
+check "core untouched" remote_is "$FORK_URL"
+finish
+
+start "casks: already set up, interactive Enter (default): taps"
+setup_done_no_casks
+interactive '\n\n' "${CUR_ENV[@]}"   # [S] by default, casks: Enter
+check "exit 0" test "$RC" -eq 0
+check "tapped" cask_tapped_ok
+check "profile untouched" no_backups
+finish
+
+start "casks: already set up, interactive n: no tap, hint, nothing changed"
+setup_done_no_casks
+before="$(snapshot)"
+interactive 'S\nn\n' "${CUR_ENV[@]}"   # S, casks: n
+check "exit 0" test "$RC" -eq 0
+check "asked" grep -qF "$CASK_Q" "$T/tty.out"
+check "hint" has "$CASK_HINT"
+check "no cask tap" no_cask_tap
+check "nothing changed" test "$before" = "$(snapshot)"
+finish
+
+start "casks: already set up, --no-casks / INTELBREW_CASKS=0: not asked, no tap"
+setup_done_no_casks
+before="$(snapshot)"
+INSTALL_ARGS=(--no-casks)
+interactive 'S\ny\n' "${CUR_ENV[@]}"
+check "--no-casks: exit 0" test "$RC" -eq 0
+check "--no-casks: not asked" bash -c '! grep -q "Y/n" "$1"' _ "$T/tty.out"
+check "--no-casks: says so" has "Casks (brew install --cask) are not enabled (--no-casks given)."
+check "--no-casks: no cask tap" no_cask_tap
+INSTALL_ARGS=()
+interactive 'S\ny\n' INTELBREW_CASKS=0 "${CUR_ENV[@]}"
+check "CASKS=0: exit 0" test "$RC" -eq 0
+check "CASKS=0: not asked" bash -c '! grep -q "Y/n" "$1"' _ "$T/tty.out"
+check "CASKS=0: no cask tap" no_cask_tap
+check "nothing changed" test "$before" = "$(snapshot)"
+finish
+
+start "casks: already set up, input closed (no answer): no tap, hint, no hang"
+setup_done_no_casks
+before="$(snapshot)"
+interactive '' "${CUR_ENV[@]}"   # input ends at once: [S] by default, then no cask answer
+check "exit 0" test "$RC" -eq 0
+check "asked" grep -qF "$CASK_Q" "$T/tty.out"
+check "says no answer" has "No answer (input closed): casks not enabled."
+check "hint" has "$CASK_HINT"
+check "no cask tap" no_cask_tap
+check "nothing changed" test "$before" = "$(snapshot)"
+finish
+
+start "casks: already set up, --casks --yes: taps"
+setup_done_no_casks
+INSTALL_ARGS=(--casks --yes)
+run_install INTELBREW_YES=0 "${CUR_ENV[@]}"
+check "exit 0" test "$RC" -eq 0
+check "not asked" no_text "Enable casks?"
+check "tapped" cask_tapped_ok
+check "profile untouched" no_backups
 finish
 
 start "casks: tap failure warns, core setup still completes"
@@ -1089,7 +1200,7 @@ check "nothing ran" nothing_ran
 finish
 
 start "piped: answers come from INTELBREW_TTY_IN, not from the piped script"
-printf '\nyes\n' >"$T/answers"   # casks: No, Proceed: yes
+printf 'n\nyes\n' >"$T/answers"   # casks: n, Proceed: yes
 run_piped INTELBREW_TTY_IN="$T/answers" INTELBREW_TTY_OUT="$T/tty.out"
 check "installed" fresh_ok
 check "Proceed asked on the tty" grep -qF 'Proceed? Type "yes" to continue: ' "$T/tty.out"
@@ -1097,7 +1208,7 @@ finish
 
 start "piped: [U]: the uninstaller reads its answer from the tty, not the script"
 make_existing "$UPSTREAM_URL" upstream
-printf 'U\nyes\ny\n\nyes\n' >"$T/answers"   # U, confirm, uninstaller's y, casks: No, Proceed
+printf 'U\nyes\ny\nn\nyes\n' >"$T/answers"   # U, confirm, uninstaller's y, casks: n, Proceed
 run_piped INTELBREW_TTY_IN="$T/answers" INTELBREW_TTY_OUT="$T/tty.out"
 check "uninstaller ran" logged "uninstaller --path $P"
 check "then installed fresh" fresh_ok
@@ -1117,7 +1228,7 @@ finish
 
 start "piped: stdin-reading git/brew/curl/uninstaller get nothing ([U] path)"
 make_existing "$UPSTREAM_URL" upstream
-printf 'U\nyes\ny\n\nyes\n' >"$T/answers"
+printf 'U\nyes\ny\nn\nyes\n' >"$T/answers"
 PIPE_TRAILER="$TRAILER"
 run_piped STUB_EAT_STDIN=1 INTELBREW_TTY_IN="$T/answers" INTELBREW_TTY_OUT="$T/tty.out"
 check "uninstaller ran" logged "uninstaller --path $P"
@@ -1148,6 +1259,32 @@ check "says why and what to do" has "No terminal to ask for confirmation"
 check "suggests --yes when piped" has "bash -s -- --yes"
 check "did not time out" no_text "TimeoutExpired"
 check "nothing ran" nothing_ran
+finish
+
+start "no tty at all, already set up, --yes: no cask tap, hint"
+make_existing "$FORK_URL"
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+before="$(snapshot)"
+INSTALL_ARGS=(--yes); NO_CTTY=1
+run_piped "${CUR_ENV[@]}"
+NO_CTTY=0
+check "exit 0" test "$RC" -eq 0
+check "did not time out" no_text "TimeoutExpired"
+check "hint" has "$CASK_HINT"
+check "no cask tap" no_cask_tap
+check "nothing changed" test "$before" = "$(snapshot)"
+finish
+
+start "no tty at all, already set up, no --yes: stops before asking anything"
+make_existing "$FORK_URL"
+printf '%s\n' "$ALL3" >"$H/.zshenv"
+NO_CTTY=1
+run_piped "${CUR_ENV[@]}"
+NO_CTTY=0
+check "nonzero" test "$RC" -ne 0
+check "says why" has "No terminal to ask for confirmation"
+check "did not time out" no_text "TimeoutExpired"
+check "no cask tap" no_cask_tap
 finish
 
 start "no tty at all, with --yes: installs"

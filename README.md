@@ -67,12 +67,16 @@ What you'll see:
 
 1. If you already have Homebrew, a choice: press **Enter** to switch it in place and keep
    your installed packages.
-2. A list of every change it will make. Type the word **`yes`** and press Enter to go
+2. If casks are off, a short boxed note asking whether to enable them (for apps installed
+   with `brew install --cask`). Press **Enter** for yes (a one-time download of about
+   620 MB) or type `n` to skip. It asks again on later runs while casks stay off, even on
+   a Mac that is already set up; `--no-casks` skips the question.
+3. A list of every change it will make. Type the word **`yes`** and press Enter to go
    ahead. Anything else stops it with nothing changed.
-3. Possibly your Mac password, if it needs to create folders in `/usr/local`. Nothing
+4. Possibly your Mac password, if it needs to create folders in `/usr/local`. Nothing
    shows on screen while you type it; that's normal.
-4. A one-time download of about 1.3 GB (roughly 5-15 minutes).
-5. A boxed **ACTION NEEDED** note at the end: quit Terminal and open it again. Windows
+5. A one-time download of about 1.3 GB (roughly 5-15 minutes).
+6. A boxed **ACTION NEEDED** note at the end: quit Terminal and open it again. Windows
    that were already open keep the old settings until restarted (`exec $SHELL -l`).
 
 To check it worked, in the new Terminal window:
@@ -86,7 +90,7 @@ Both lines should mention `d4rkwyng`. To check the core tap itself,
 fork's URL. Then use `brew install` and `brew upgrade` as usual.
 
 **Apps (`brew install --cask`)** need `brew tap homebrew/cask` once (about 620 MB). The
-installer offers it (default No), or pass `--casks`; see
+installer asks whenever casks are off (default yes), or pass `--casks` / `--no-casks`; see
 [below](#brew-install---cask-says-no-cask-with-this-name-exists). Everything the installer
 checks and changes is in [docs/installer.md](docs/installer.md).
 
@@ -128,9 +132,13 @@ builder (an Intel Sonoma VM), from its daily reports:
 ### `brew install --cask` says "No Cask with this name exists"
 
 Casks leave API mode too, so tap them once: `brew tap homebrew/cask`. That's a full clone
-of about 620 MB, kept current by `brew update`. The installer asks whether to do this for
-you (default No; `--yes` alone skips it). To have it done unasked, pass `--casks` or set
-`INTELBREW_CASKS=1`, for example (also fine later, on a Mac already set up):
+of about 620 MB, kept current by `brew update`. Whenever casks are off, the installer asks
+whether to do this for you, default yes, including when you run it again on a Mac that is
+already set up (then a yes taps casks and changes nothing else). `--yes` alone never taps
+them (it only makes the required changes) and prints a reminder instead; with no
+terminal to answer on, it doesn't either. To have it done unasked, pass `--casks` or set
+`INTELBREW_CASKS=1`; to skip the question, pass `--no-casks` or set `INTELBREW_CASKS=0`.
+For example, unasked:
 
 ```sh
 INTELBREW_CASKS=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/d4rkwyng/intelbrew/main/install.sh)"

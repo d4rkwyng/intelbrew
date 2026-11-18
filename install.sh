@@ -66,12 +66,15 @@ Intelbrew installer: Homebrew in git mode with Intel Sonoma bottles.
 
 Options / environment:
   --yes, INTELBREW_YES=1   don't ask before each change (still prints them);
-                           optional changes that default to No are not made.
+                           optional changes (casks) are not made.
                            Required when there is no terminal (CI, ssh without -t).
   --casks, INTELBREW_CASKS=1
                            also tap homebrew/cask (brew install --cask; a full
                            clone, about 620 MB) without asking, even with --yes.
-                           Without it the installer asks, default No.
+  --no-casks, INTELBREW_CASKS=0
+                           don't tap homebrew/cask, and don't ask.
+                           With neither, the installer asks whenever casks are
+                           off, default Yes (also on a Mac already set up).
   -h, --help               show this and exit
   INTELBREW_PREFIX         install prefix, default /usr/local (for testing only:
                            Intel bottles are only relocatable to /usr/local)
@@ -119,11 +122,13 @@ LINE_BREW="export HOMEBREW_BREW_GIT_REMOTE=\"$BREW_GIT_REMOTE\""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 ASSUME_YES="${INTELBREW_YES:-0}"
-WANT_CASKS="${INTELBREW_CASKS:-0}"
+WANT_CASKS="${INTELBREW_CASKS:-}"   # 1: tap unasked, 0: don't tap or ask, empty: ask
+[[ "$WANT_CASKS" == 0 || "$WANT_CASKS" == 1 ]] || WANT_CASKS=""
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
     --casks) WANT_CASKS=1 ;;
+    --no-casks) WANT_CASKS=0 ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Error: unknown option: %s\n' "$arg" >&2; exit 2 ;;
   esac
@@ -137,9 +142,10 @@ run()  { printf '+ %s\n' "$*"; "$@"; }
 TTY_IN="${INTELBREW_TTY_IN:-/dev/tty}"
 TTY_OUT="${INTELBREW_TTY_OUT:-/dev/tty}"
 ask() {  # ask "<prompt>": prints the prompt to the terminal, reads one line into $answer
-  answer=""
+  # ask_eof=1: the input ended (closed terminal, empty file) instead of a line being read.
+  answer=""; ask_eof=0
   printf '%s' "$1" >&4
-  IFS= read -r answer <&3 || true
+  IFS= read -r answer <&3 || ask_eof=1
 }
 
 confirm() {  # confirm "<question>": 0 only on an explicit "yes" (or --yes)
@@ -149,15 +155,6 @@ confirm() {  # confirm "<question>": 0 only on an explicit "yes" (or --yes)
   fi
   ask "$1 Type \"yes\" to continue: "
   [[ "$answer" == "yes" ]]
-}
-
-offer() {  # offer "<question>": optional change, default No; never made with --yes
-  if [[ "$ASSUME_YES" == "1" ]]; then
-    printf '%s (no: --yes only makes the required changes)\n' "$1"
-    return 1
-  fi
-  ask "$1 [y/N]: "
-  [[ "$answer" == [Yy] || "$answer" == [Yy][Ee][Ss] ]]
 }
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
@@ -585,15 +582,61 @@ plan_profiles
 
 # ---- 3c. optional: homebrew/cask ---------------------------------------------------
 # In git mode `brew install --cask X` finds nothing until homebrew/cask is tapped (a full
-# clone of upstream Homebrew/homebrew-cask). Optional: asked before the plan, default No;
-# --casks / INTELBREW_CASKS=1 turns it on without asking.
+# clone of upstream Homebrew/homebrew-cask). Optional: whenever it isn't tapped, asked
+# before the plan (or on a Mac already set up), default Yes; --casks / INTELBREW_CASKS=1
+# taps it without asking, --no-casks / INTELBREW_CASKS=0 skips it without asking, and
+# --yes alone never taps it (--yes only makes the required changes).
 CASK_SIZE="about 620 MB"
 cask_dir() { printf '%s/homebrew-cask' "$(dirname "$core")"; }
+cask_hint() { say "Casks (brew install --cask) are not enabled; to add them, run this again with --casks ($CASK_SIZE)."; }
+ask_casks() {  # the cask question: 0 = tap. Enter means Yes; no answer (input closed) means No.
+  local rule l
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    printf 'Enable casks? (no: --yes only makes the required changes)\n'
+    cask_hint; return 1
+  fi
+  rule="+$(printf '%60s' '' | tr ' ' '=')+"
+  {
+    printf '\n%s\n' "$rule"
+    for l in "Casks are OFF: apps installed with brew install --cask" \
+             "(Chrome, VS Code, ...) won't be found."; do
+      printf '| %-58s |\n' "$l"
+    done
+    printf '%s\n' "$rule"
+  } >&4
+  while :; do
+    ask "Enable casks? One-time download, $CASK_SIZE. [Y/n]: "
+    if [[ -z "$answer" ]] && (( ask_eof )); then
+      printf '\n' >&4
+      say "No answer (input closed): casks not enabled."
+      break
+    fi
+    case "$(lower "$answer")" in
+      ""|y|yes) return 0 ;;
+      n|no) break ;;
+      *) (( ask_eof == 0 )) || break
+         printf 'Please answer y or n.\n' >&4 ;;
+    esac
+  done
+  cask_hint; return 1
+}
+tap_casks() {  # Optional: a failure is reported but doesn't undo or stop anything else.
+  say "One-time download: homebrew/cask is $CASK_SIZE."
+  if run "$BREW" tap homebrew/cask && [[ -d "$(cask_dir)/.git" ]]; then
+    say "Casks enabled: homebrew/cask is tapped at $(cask_dir)."
+  else
+    warn "brew tap homebrew/cask failed (see above). Everything else continues; to retry later, run: brew tap homebrew/cask"
+  fi
+}
 cask_tapped=0
 [[ ! -d "$(cask_dir)/.git" ]] || cask_tapped=1
-cask_action=none   # none | tap | declined
+cask_action=none   # none | tap | ask | declined
 if (( cask_tapped == 0 )); then
-  if [[ "$WANT_CASKS" == "1" ]]; then cask_action=tap; else cask_action=declined; fi
+  case "$WANT_CASKS" in
+    1) cask_action=tap ;;
+    0) cask_action=declined ;;
+    *) cask_action=ask ;;
+  esac
 fi
 
 # ---- 4. plan ---------------------------------------------------------------------
@@ -745,7 +788,10 @@ if [[ "$core_action" == "none" && ${#profile_changes[@]} -eq 0 && "$brew_action"
     warn "Unrecognised login shell (${SHELL:-unset}). Make sure its startup file has:"
     printf '  %s\n  %s\n  %s\n' "$LINE_API" "$LINE_REMOTE" "$LINE_BREW"
   fi
-  (( cask_tapped == 1 )) || say "Casks (brew install --cask) are not enabled; to add them, run this again with --casks ($CASK_SIZE)."
+  case "$cask_action" in
+    ask)      if ask_casks; then tap_casks; fi ;;
+    declined) say "Casks (brew install --cask) are not enabled (--no-casks given)." ;;
+  esac
   [[ "$mode" != "existing" ]] || report_installed
   env_is_current || action_box
   exit 0
@@ -755,9 +801,8 @@ need_update=0
 [[ "$core_action" == "none" && "$brew_action" == none ]] || need_update=1
 
 # Asked before the plan, so the plan shows the answer and "Proceed?" covers it.
-if [[ "$cask_action" == declined ]] &&
-   offer "Also enable casks (brew install --cask)? This clones homebrew/cask, $CASK_SIZE."; then
-  cask_action=tap
+if [[ "$cask_action" == ask ]]; then
+  if ask_casks; then cask_action=tap; else cask_action=declined; fi
 fi
 
 say "Plan:"
@@ -881,15 +926,7 @@ verify_core() {
 }
 verify_core
 
-if [[ "$cask_action" == tap ]]; then
-  # Optional: a failure here is reported but doesn't undo or stop the core setup.
-  say "One-time download: homebrew/cask is $CASK_SIZE."
-  if run "$BREW" tap homebrew/cask && [[ -d "$(cask_dir)/.git" ]]; then
-    say "Casks enabled: homebrew/cask is tapped at $(cask_dir)."
-  else
-    warn "brew tap homebrew/cask failed (see above). Everything else continues; to retry later, run: brew tap homebrew/cask"
-  fi
-fi
+[[ "$cask_action" != tap ]] || tap_casks
 
 apply_profiles
 

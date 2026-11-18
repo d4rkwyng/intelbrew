@@ -86,11 +86,20 @@ place (every copy; no line is deleted). Each edited file is backed up next to it
 
 ## Casks (optional)
 
-Before printing the plan it asks: *Also enable casks (brew install --cask)? This clones
-homebrew/cask, about 620 MB.* The default is No; if you say yes, `brew tap homebrew/cask`
-appears in the plan and runs after the core tap. If homebrew/cask is already tapped it
-doesn't ask, and the plan says so. If the cask clone fails, it warns and carries on; the
-core setup is unaffected.
+Whenever homebrew/cask isn't tapped, it shows a short boxed note before the plan
+(*Casks are OFF: apps installed with brew install --cask (Chrome, VS Code, ...) won't be
+found.*) and asks *Enable casks? One-time download, about 620 MB. [Y/n]*. Enter means
+yes. If you say yes, `brew tap homebrew/cask` appears in the plan and runs after the
+core tap. If you say no, it prints a one-line reminder of how to add them later.
+
+It asks on a Mac that is already set up too (the "Already set up ... Nothing to change"
+run): there a yes runs just `brew tap homebrew/cask`, with no plan or `yes` to type, and
+changes nothing else.
+
+It never taps casks with `--yes` alone, or when the terminal input ends without an
+answer; both print the reminder. `--no-casks` skips the question. If homebrew/cask is
+already tapped it doesn't ask, and the plan says so. If the cask clone fails, it warns
+and carries on; the core setup is unaffected.
 
 ## Download size and the ACTION NEEDED note
 
@@ -120,10 +129,11 @@ installer warns if `brew update` leaves Homebrew/brew off the release tag.
 ## Options
 
 - `--yes`, or `INTELBREW_YES=1`: don't ask before each change. It still prints them.
-  Optional changes that default to No are not made. With an existing Homebrew it always
-  switches in place.
+  Optional changes (casks) are not made. With an existing Homebrew it always switches in
+  place.
 - `--casks`, or `INTELBREW_CASKS=1`: tap homebrew/cask without asking, also with `--yes`.
   On an otherwise set-up Mac this only adds the cask tap.
+- `--no-casks`, or `INTELBREW_CASKS=0`: don't tap homebrew/cask, and don't ask.
 
 With the short form, put options after `bash -s --`:
 `curl -fsSL https://intelbrew.sh | bash -s -- --yes`. Questions are always read from
