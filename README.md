@@ -34,12 +34,13 @@ missing. The exact CPU check is in [docs/installer.md](docs/installer.md#before-
 
 ### Which Macs
 
-- **Tested:** a 2019 Mac Pro on Tahoe and Sequoia, and the builder, a macOS Sonoma VM.
+- **Tested:** a 2019 Mac Pro on Tahoe and Sequoia, a Mac Pro (Late 2013, Intel Xeon E5, Ivy Bridge-EP), macOS 15 Sequoia via OpenCore Legacy Patcher,
+  and the builder, a macOS Sonoma VM.
 - **Expected to work:** macOS 14 or newer on a Westmere-or-newer Intel CPU. That's the Intel
   Macs Apple supports on [Sonoma](https://support.apple.com/en-us/105113) (MacBook Pro and
   MacBook Air 2018 and later, iMac 2019 and later, iMac Pro, Mac mini 2018, Mac Pro 2019),
-  and OpenCore Legacy Patcher Macs from about 2011 on, except a few Core i3 models. Not
-  tested by us yet.
+  and OpenCore Legacy Patcher Macs from about 2011 on, except a few Core i3 models. One
+  tested so far: the 2013 Mac Pro.
 - **Edge or out:** Westmere CPUs (some 2010 Macs) are at the edge, untested. Nehalem
   (2009-2010) and Core i3 models without AES-NI: the installer stops. Core 2 and Penryn
   are out for now; an older-CPU build is under investigation. macOS 13 and older are out.
