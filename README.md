@@ -222,6 +222,10 @@ rebases or force-pushes.
 - `brew update` and formula loading are slower than in API mode.
 - Casks need `brew tap homebrew/cask` once ([above](#brew-install---cask-says-no-cask-with-this-name-exists)).
 
+## Built with Claude
+
+Intelbrew is built with Claude. Claude Code agents wrote the code under Derek's direction: he decides what to build and tests it on his Macs, and every change goes through review, automated tests and a real signed-app launch check before release. More in [the write-up](https://mindtricks.io/blog/20261117-intelbrew-tankard).
+
 ## Licence and trademarks
 
 The scripts and docs here are BSD-2-Clause, like Homebrew ([LICENSE](LICENSE)). Bottles are
