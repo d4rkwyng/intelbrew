@@ -916,7 +916,9 @@ platform_case "Big Sur 11 refused"               refuse "older than macOS 14" ST
 platform_case "Apple Silicon refused"            refuse "Apple Silicon" STUB_ARCH=arm64
 platform_case "Rosetta refused"                  refuse "Apple Silicon" STUB_TRANSLATED=1
 platform_case "Penryn CPU refused"               refuse "lacks: SSE4.2 POPCNT AES PCLMULQDQ" "STUB_FEATURES=FPU SSE3 SSSE3 SSE4.1"
-platform_case "no CLT refused"                   refuse "Command Line Tools are not installed" STUB_CLT=no STUB_PKGUTIL=no
+platform_case "Nehalem CPU refused"              refuse "lacks: AES PCLMULQDQ" "STUB_FEATURES=FPU SSE3 SSSE3 SSE4.1 SSE4.2 POPCNT"
+platform_case "Core i3 without AES-NI refused"   refuse "lacks: AES." "STUB_FEATURES=FPU SSE3 PCLMULQDQ SSSE3 SSE4.1 SSE4.2 POPCNT"
+platform_case "no CLT refused"                refuse "Command Line Tools are not installed" STUB_CLT=no STUB_PKGUTIL=no
 platform_case "CLT via pkgutil fallback accepted" accept - STUB_CLT=no STUB_PKGUTIL=yes
 
 # A brew symlink left pointing nowhere (Homebrew/ deleted by hand) must be caught before
@@ -927,6 +929,19 @@ run_install
 check "nonzero" test "$RC" -ne 0
 check "names the broken symlink" has "broken symlink"
 check "no clone" test ! -e "$P/Homebrew"
+check "no profile (HOME untouched)" test -z "$(find "$H" -mindepth 1 -print -quit)"
+finish
+
+# A brew elsewhere on PATH (e.g. /opt/homebrew on an Intel Mac) with none in the prefix:
+# refused before anything changes, and the message says what to do.
+start "brew outside the prefix on PATH: refuses, says how to proceed"
+mkdir -p "$T/elsewhere/bin"; cp "$STUBS/brew-impl" "$T/elsewhere/bin/brew"
+run_install PATH="$T/elsewhere/bin:$STUBS:/usr/bin:/bin:/usr/sbin:/sbin"
+check "nonzero" test "$RC" -ne 0
+check "names it" has "Found brew at $T/elsewhere/bin/brew, outside $P."
+check "says what to do" has "Take it off your PATH (or uninstall it), then run this again. Nothing was changed."
+check "no clone" test ! -e "$P/Homebrew"
+check "nothing in the prefix" test -z "$(find "$P" -mindepth 1 -print -quit)"
 check "no profile (HOME untouched)" test -z "$(find "$H" -mindepth 1 -print -quit)"
 finish
 

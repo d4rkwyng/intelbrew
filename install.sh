@@ -204,14 +204,15 @@ fi
 
 # Bottles target Homebrew's Intel baseline, -march=westmere
 # (Library/Homebrew/extend/os/mac/hardware.rb), which needs these CPU features.
-# Core 2 / Penryn CPUs lack them, and pouring the bottles there gives crashing binaries.
+# Core 2 / Penryn CPUs lack them all, Nehalem lacks AES and PCLMULQDQ, and some Core i3
+# models lack AES. Pouring the bottles there gives crashing binaries.
 cpu_features=" $(sysctl -n machdep.cpu.features 2>/dev/null || true) "
 missing_features=""
 for feature in SSE4.2 POPCNT AES PCLMULQDQ; do
   [[ "$cpu_features" == *" $feature "* ]] || missing_features="$missing_features $feature"
 done
 if [[ -n "$missing_features" ]]; then
-  die "This CPU lacks:$missing_features. Intelbrew's bottles need a Westmere-class CPU or newer; they won't run on Core 2 / Penryn. Nothing was changed."
+  die "This CPU lacks:$missing_features. Intelbrew's bottles are built for Westmere (-march=westmere) and need all of SSE4.2, POPCNT, AES and PCLMULQDQ; they won't run on Core 2, Penryn, Nehalem, or the Core i3 models without AES-NI. Nothing was changed."
 fi
 
 # Command Line Tools: needed on Intel even to pour bottles. Don't rely on
@@ -470,7 +471,7 @@ EOF
   fi
 else
   other="$(command -v brew 2>/dev/null || true)"
-  [[ -z "$other" ]] || die "Found brew at $other, outside $PREFIX. Intelbrew's bottles only work in $PREFIX; this installer won't touch that install."
+  [[ -z "$other" ]] || die "Found brew at $other, outside $PREFIX. Intelbrew's bottles only work in $PREFIX; this installer won't touch that install. Take it off your PATH (or uninstall it), then run this again. Nothing was changed."
   mode=fresh
 fi
 
