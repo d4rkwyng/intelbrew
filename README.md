@@ -25,8 +25,8 @@ every day on its own Intel macOS builder. Run one command to switch, then use `b
 
 - An **Intel Mac** (not Apple Silicon).
 - **macOS 14 Sonoma or newer** (natively, or through OpenCore Legacy Patcher).
-- **Not a Core 2 or Penryn CPU.** Most Macs from 2010-2011 on work; a few Core i3 models
-  don't. The installer checks for you.
+- **Not a Core 2, Penryn or Nehalem CPU.** Most Macs from 2010-2011 on work; a few Core i3
+  models don't. The installer checks for you.
 - Apple's **Command Line Tools**. If you don't have them, run `xcode-select --install`.
 
 The installer checks all of these and stops, without changing anything, if one is
@@ -162,7 +162,9 @@ example because it needs a full Xcode or a newer toolchain (currently this inclu
 
 ### How do I go back to upstream Homebrew?
 
-Remove the three `export` lines from your shell profile, open a new terminal, and run:
+Remove the three `export` lines from your shell startup files (zsh: `~/.zshenv`; bash:
+`~/.bash_profile` and `~/.bashrc`; the installer also rewrote any older copies elsewhere,
+which `grep -n HOMEBREW_ ~/.z* ~/.bash* ~/.profile` lists), open a new terminal, and run:
 
 ```sh
 git -C "$(brew --repository)" remote set-url origin https://github.com/Homebrew/brew

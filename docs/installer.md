@@ -6,12 +6,14 @@ The installer prints every change and asks before making it.
 ## Before it starts
 
 It refuses to run on Apple Silicon (including under Rosetta), on macOS 13 Ventura or
-older, on a CPU without SSE4.2, POPCNT, AES and PCLMULQDQ (Core 2 / Penryn), and without
-the Command Line Tools. See [Is this for me?](../README.md#is-this-for-me).
+older, on a CPU without SSE4.2, POPCNT, AES and PCLMULQDQ (Core 2, Penryn, Nehalem, and
+the Core i3 models without AES-NI), and without the Command Line Tools. See
+[Is this for me?](../README.md#is-this-for-me).
 
 The CPU check matches Homebrew's Intel bottles for Ventura and later, which target
 Westmere. Core 2 and Penryn Macs (including many OpenCore Legacy Patcher machines) can't
-run them. To run the same check yourself (it should print `4`):
+run them, and neither can Nehalem (no AES or PCLMULQDQ) or a Core i3 without AES-NI. To
+run the same check yourself (it should print `4`):
 
 ```sh
 sysctl -n machdep.cpu.features | tr ' ' '\n' | grep -cxE 'SSE4\.2|POPCNT|AES|PCLMULQDQ'
@@ -83,6 +85,10 @@ place (every copy; no line is deleted). Each edited file is backed up next to it
   `HOMEBREW_BREW_GIT_REMOTE` to anything else.
 - It refuses if an existing homebrew/core tap is a shallow clone, since `brew update`
   refuses those. It prints the `git fetch --unshallow` command to run first.
+- It refuses, changing nothing, if `/usr/local` holds a partial Homebrew (only one of
+  `bin/brew` and a `Homebrew` git checkout) or a `bin/brew` symlink pointing nowhere, or
+  if there is no Homebrew in `/usr/local` but a `brew` elsewhere is on your `PATH` (for
+  example `/opt/homebrew`): take that one off your `PATH` or uninstall it first.
 
 ## Casks (optional)
 
